@@ -9,13 +9,18 @@ description: 操作 115 网盘（列目录、递归树、搜索、重命名、�
 
 ## 安装
 
+需要 **Python 3.12 或更高**（`p115client` 的硬性要求）。
+
 ```bash
+git clone https://github.com/DeerFishSheep/Skills.git
+cd Skills/115-Pan-Skill
+
 python3 scripts/p115.py setup     # 在 skill 目录建 .venv 并装依赖
 python3 scripts/p115.py login     # 从本机浏览器导入 cookie
 python3 scripts/p115.py doctor    # 验证一切就绪
 ```
 
-`setup` 幂等，重复执行安全。所有的运行时产物都在 skill 目录内：
+`setup` 幂等，重复执行安全，会自动处理目录迁移后的 venv 失效问题。所有的运行时产物都在 skill 目录内：
 
 ```
 115-Pan-Skill/

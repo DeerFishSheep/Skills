@@ -15,24 +15,130 @@
 - **解释器自动切换** —— 任意 Python 调用都会自动切换到正确的 venv
 - **请求限流** —— 内置 1 秒 1 次节流，避免触发服务端封禁
 
-## 安装
+## 环境要求
 
-需要 Python 3.11 或更高版本。
+| 项 | 要求 |
+|---|---|
+| Python | **3.12 或更高**（`p115client` 硬性要求，3.9 / 3.10 / 3.11 均无法安装） |
+| 操作系统 | macOS / Linux / Windows |
+| 网络 | 可访问 pypi.org 与 115.com |
+
+检查当前版本：
 
 ```bash
-git clone <repo-url> 115-Pan-Skill
-cd 115-Pan-Skill
-
-python3 scripts/p115.py setup     # 创建 .venv 并安装依赖
-python3 scripts/p115.py login     # 从本机浏览器导入 cookie
-python3 scripts/p115.py doctor    # 验证安装
+python3 -V
 ```
 
-`login` 依赖浏览器中已登录 115.com。若无法自动导入，可手动传入：
+若低于 3.12，需要先安装新版 Python：
+
+- **macOS**：`brew install python@3.13`
+- **Ubuntu / Debian**：`sudo apt install python3.12 python3.12-venv`
+- **Windows**：从 [python.org](https://www.python.org/downloads/) 下载安装
+
+> macOS 自带的 `/usr/bin/python3` 通常为 3.9，无法使用。请确认 `which python3` 指向 Homebrew 安装的版本。
+
+## 安装
+
+### 1. 获取代码
+
+```bash
+git clone https://github.com/DeerFishSheep/Skills.git
+cd Skills/115-Pan-Skill
+```
+
+无需 git 时可下载 ZIP 后解压。
+
+### 2. 安装依赖
+
+```bash
+python3 scripts/p115.py setup
+```
+
+该命令会：
+
+1. 在 `115-Pan-Skill/.venv/` 创建虚拟环境
+2. 安装 `requirements.txt` 中的依赖
+3. 写入 `.setup-state.json` 记录安装信息
+
+重复执行安全。若检测到目录曾移动到其他位置，会自动删除旧 venv 并重建。
+
+### 3. 准备 Cookie
+
+从浏览器自动导入（推荐，需该浏览器已登录 115.com）：
+
+```bash
+python3 scripts/p115.py login
+```
+
+自动依次探测 chrome → edge → brave → chromium → vivaldi → opera → safari → firefox。
+也可指定浏览器：
+
+```bash
+python3 scripts/p115.py login safari
+```
+
+若自动导入失败，手动传入。在浏览器打开 115.com，按 `F12` → Network，任选一个请求，
+从请求头 `Cookie` 中复制 `UID`、`CID`、`KID`、`SEID` 四项：
 
 ```bash
 python3 scripts/p115.py set-cookie 'UID=...; CID=...; KID=...; SEID=...'
 ```
+
+> macOS 上读取 Chrome / Safari 的 cookie 会触发系统授权弹窗，需允许。
+> Safari 需要「完全磁盘访问权限」，否则会报 `PermissionError`。
+
+### 4. 验证
+
+```bash
+python3 scripts/p115.py doctor
+```
+
+输出示例：
+
+```
+─── 115 skill 自检 ───
+skill 目录:   /path/to/115-Pan-Skill
+venv:         /path/to/115-Pan-Skill/.venv  ✓ 存在
+venv python:  /path/to/115-Pan-Skill/.venv/bin/python
+当前解释器:   /path/to/115-Pan-Skill/.venv/bin/python
+
+p115client:   ✓ 0.0.9.7.2
+  位置:       /path/to/115-Pan-Skill/.venv/lib/python3.x/site-packages/p115client
+
+cookie:       ✓ /path/to/115-Pan-Skill/cookies.txt
+
+账号:         ✓ 你的用户名 (VIP=1)
+
+✓ 一切就绪，可以用了。
+```
+
+看到最后一行即可开始使用。
+
+## 安装位置说明
+
+所有运行时产物都在 skill 目录内：
+
+```
+115-Pan-Skill/
+├── .venv/              Python 虚拟环境，约 80 MB（不入库）
+├── cookies.txt         登录凭证，权限 600（不入库）
+├── .setup-state.json   安装元数据（不入库）
+├── scripts/p115.py
+└── 文档
+```
+
+好处是 skill 安装到哪里，依赖就跟到哪里：
+
+```
+~/.agents/skills/115-Pan-Skill/.venv/
+~/tools/115-Pan-Skill/.venv/
+/opt/skills/115-Pan-Skill/.venv/
+```
+
+多个副本互不干扰，卸载时直接删除整个目录即可。
+
+**venv 不能跨机器拷贝。** 它内部记录了绝对路径，复制到其他电脑或移动到其他目录后会失效。
+迁移时只复制源码（约 150 KB），在新位置重新执行 `setup`。
 
 ## 使用
 

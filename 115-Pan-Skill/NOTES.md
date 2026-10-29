@@ -42,7 +42,11 @@ def call(fn, *args, **kwargs):
 
 ## p115client 版本约束
 
-使用版本 **0.0.9.7.2**。源码核对后的关键结论：
+使用版本 **0.0.9.7.2**，要求 **Python ≥ 3.12**（`Requires-Python: >=3.12,<4.0`）。
+3.9 / 3.10 / 3.11 下 pip 找不到可安装的发行版。`setup` 若在低版本 Python 下执行会失败，
+需先升级解释器。
+
+源码核对后的关键结论：
 
 - **无 `check_for_relogin` 参数。** 控制命令行二维码的是 `P115Client(cookies, console_qrcode=False)`。代码显式传 `False`，任何路径下都不会进入扫码流程。
 - **cookie 以字符串传入，不传路径。** 重名 cookie 必须在进入 client 前去除；传路径时 client 内部会回写文件，去重失效。
@@ -205,6 +209,18 @@ def in_fixed_venv():
 ```
 
 启动时若当前环境缺少 p115client 而 `<skill>/.venv` 存在，`_reexec_into_fixed_venv()` 通过 `os.execv` 切换解释器，并以 `P115_REEXEC=1` 防止递归。
+
+### Python 版本门槛
+
+`p115client` 声明 `Requires-Python: >=3.12,<4.0`。3.9 / 3.10 / 3.11 下 pip 报告
+`Could not find a version that satisfies the requirement p115client (from versions: none)`，
+信息不够直观。
+
+`cmd_setup` 在创建 venv 前检查 `sys.version_info`，低于 3.12 时直接给出三个平台的升级命令。
+
+注意：该检查只在 `.venv` 不存在时才有意义。若 `.venv` 已存在，
+`_reexec_into_fixed_venv()` 会先把低版本解释器切换成 venv 内的 3.12+，
+此时版本检查自然通过 —— 这是期望行为。
 
 ### 版本号读取
 

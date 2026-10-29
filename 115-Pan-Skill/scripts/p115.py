@@ -610,6 +610,15 @@ def cmd_setup(a):
     import subprocess
     import venv as venv_mod
 
+    # p115client 要求 Python >= 3.12，低于此版本 pip 找不到可安装发行版。
+    if sys.version_info < (3, 12):
+        err("需要 Python 3.12 或更高，当前为 %d.%d.%d\n"
+            "  p115client 不支持更低版本，请先升级 Python。\n"
+            "  macOS: brew install python@3.13\n"
+            "  Ubuntu/Debian: sudo apt install python3.12 python3.12-venv\n"
+            "  Windows: https://www.python.org/downloads/"
+            % sys.version_info[:3])
+
     py = venv_python()
     print("skill 目录: %s" % SKILL_DIR)
     print("安装位置:   %s" % VENV_HOME)
