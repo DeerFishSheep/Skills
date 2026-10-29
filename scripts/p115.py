@@ -44,7 +44,7 @@ VENV_HOME = os.path.join(SKILL_DIR, ".venv")
 COOKIE_HOME = SKILL_DIR
 STATE_FILE = os.path.join(SKILL_DIR, ".setup-state.json")
 
-# 兼容旧版装在 ~/.115 的用户：那里有 cookie 就当备用来源
+# 兼容性：~/.115/ 下的 cookie 也作为备用来源
 LEGACY_COOKIE_HOME = os.path.expanduser("~/.115")
 IOS_CK = "/var/minis/shared/115/cookies.txt"
 
@@ -57,11 +57,11 @@ def venv_python():
 
 
 def in_fixed_venv():
-    """当前解释器是否跑在本 skill 的 venv 里。
+    """当前解释器是否运行在本 skill 的 venv 中。
 
-    不能用 realpath 比较 sys.executable —— venv 里的 python 本身就是个
-    指向系统 python 的 symlink，realpath 之后两边一模样，会误判为“在 venv 里”。
-    sys.prefix 才是可靠依据：venv 里它的值就是 venv 根目录。
+    不可用 realpath(sys.executable) 比较 —— venv 中的 python 是指向
+    系统 Python 的 symlink，realpath 后两者相同，会导致误判。
+    sys.prefix 在 venv 中即为 venv 根目录，是可靠依据。
     """
     try:
         return os.path.realpath(sys.prefix) == os.path.realpath(VENV_HOME)
@@ -213,8 +213,8 @@ def dedupe(s):
 def cookie_paths():
     """cookie 候选路径，优先级从高到低。
 
-    首选 skill 目录内的 cookies.txt —— 这样 skill 自包含，搬到哪 cookie 跟到哪。
-    旧版装在 ~/.115/ 的也兼容（只读，不自动迁移）。
+    首选 skill 目录内的 cookies.txt，使 skill 自包含。
+    同时兼容 ~/.115/ 下的存放位置（只读，不自动迁移）。
     """
     p = []
     if os.environ.get("P115_COOKIE_FILE"):
@@ -504,6 +504,7 @@ def confirm(prompt):
 
 # ================================================================ 命令
 def cmd_login(a):
+    """从本机浏览器导入 cookie。参数为浏览器名，省略则自动探测。"""
     browser = a[0] if a else "auto"
     ck, src = cookie_from_browser(browser)
     print("从 %s 导入 → %s" % (src, save_cookie(ck)))
@@ -516,6 +517,7 @@ def cmd_login(a):
 
 
 def cmd_setcookie(a):
+    """手动保存 cookie 字符串。"""
     if not a:
         err("用法：set-cookie '<k=v; k=v>'")
     dst = save_cookie(a[0])
@@ -624,7 +626,7 @@ def cmd_setup(a):
             err("创建 venv 失败：%s\n  可尝试手动：%s -m venv %s"
                 % (e, sys.executable, VENV_HOME))
         if not os.path.exists(py):
-            err("venv 建完了但找不到 python：%s" % py)
+            err("venv 创建后未找到 python：%s" % py)
     else:
         print("→ 虚拟环境已存在，跳过创建")
 
@@ -663,6 +665,7 @@ def cmd_setup(a):
 
 
 def cmd_whoami(a):
+    """显示当前账号与 cookie 签发时间。"""
     c = client()
     r = call(c.user_my)
     if JSON_OUT:
@@ -685,6 +688,7 @@ def cmd_whoami(a):
 
 
 def cmd_ls(a):
+    """列出目录内容。"""
     target = a[0] if a else "0"
     off = int(a[1]) if len(a) > 1 else 0
     lim = int(a[2]) if len(a) > 2 else 115
@@ -694,6 +698,7 @@ def cmd_ls(a):
 
 
 def cmd_tree(a):
+    """递归列出目录树，自动翻页。"""
     target = a[0] if a else "0"
     depth = int(a[1]) if len(a) > 1 else 2
     root = resolve_dir(target)
@@ -730,6 +735,7 @@ def cmd_tree(a):
 
 
 def cmd_info(a):
+    """显示单个条目的完整字段。"""
     if not a:
         err("用法：info <id|path>")
     _iid, _d, item = resolve_item(a[0])
@@ -737,6 +743,7 @@ def cmd_info(a):
 
 
 def cmd_path(a):
+    """由 id 反查完整路径。"""
     if not a:
         err("用法：path <id>")
     fid = a[0]
@@ -759,6 +766,7 @@ def cmd_path(a):
 
 
 def cmd_search(a):
+    """全局搜索（跨整个网盘）。"""
     if not a:
         err("用法：search <关键字>")
     r = call(client().fs_search, {"search_value": a[0], "limit": 30})
@@ -768,6 +776,7 @@ def cmd_search(a):
 
 
 def cmd_find(a):
+    """在指定目录下按名称递归查找。"""
     if not a:
         err("用法：find <关键字> [cid|path]")
     kw = a[0].lower()
@@ -798,6 +807,7 @@ def cmd_find(a):
 
 
 def cmd_du(a):
+    """统计目录占用。"""
     target = a[0] if a else "0"
     root = resolve_dir(target)
     stat = {"bytes": 0, "files": 0, "dirs": 0}
@@ -826,6 +836,7 @@ def cmd_du(a):
 
 
 def cmd_mkdir(a):
+    """新建文件夹。"""
     if len(a) < 2:
         err("用法：mkdir <父cid|父path> <名称>")
     pid = resolve_dir(a[0])
@@ -839,6 +850,7 @@ def cmd_mkdir(a):
 
 
 def cmd_rename(a):
+    """重命名文件或目录。"""
     if len(a) < 2:
         err("用法：rename <id|path> <新名>")
     iid, _d, item = resolve_item(a[0])
@@ -871,24 +883,28 @@ def _batch(label, ids, fn, dest=None):
 
 
 def cmd_mv(a):
+    """移动条目到目标目录。"""
     if len(a) < 2:
         err("用法：mv <目标cid|目标path> <id|path...>")
     _batch("移动", a[1:], client().fs_move, resolve_dir(a[0]))
 
 
 def cmd_cp(a):
+    """复制条目到目标目录。"""
     if len(a) < 2:
         err("用法：cp <目标cid|目标path> <id|path...>")
     _batch("复制", a[1:], client().fs_copy, resolve_dir(a[0]))
 
 
 def cmd_rm(a):
+    """删除到回收站（可还原）。"""
     if not a:
         err("用法：rm <id|path...>   （进回收站，可 restore 回来）")
     _batch("删除到回收站", a, client().fs_delete)
 
 
 def cmd_rb(a):
+    """列出回收站内容。"""
     off = int(a[0]) if a else 0
     r = call(client().recyclebin_list, {"offset": off, "limit": 115})
     if JSON_OUT:
@@ -907,6 +923,7 @@ def cmd_rb(a):
 
 
 def cmd_restore(a):
+    """从回收站还原。"""
     if not a:
         err("用法：restore <rid...>")
     r = call(client().recyclebin_revert, a)
@@ -930,6 +947,7 @@ def dl_info(pc):
 
 
 def cmd_url(a):
+    """获取下载直链及配套 cookie 头。"""
     if not a:
         err("用法：url <id|path>")
     iid, d, item = resolve_item(a[0])
@@ -962,6 +980,7 @@ def cmd_url(a):
 
 
 def cmd_dl(a):
+    """下载文件到本地。"""
     if not a:
         err("用法：dl <id|path> [输出目录]")
     outdir = a[1] if len(a) > 1 else "."
@@ -999,6 +1018,7 @@ def cmd_dl(a):
 
 
 def cmd_up(a):
+    """上传本地文件。"""
     if not a:
         err("用法：up <本地文件> [目标目录=0]")
     src = os.path.expanduser(a[0])
@@ -1024,6 +1044,7 @@ def cmd_up(a):
 
 
 def cmd_offline(a):
+    """提交离线下载任务（磁力 / ed2k / HTTP 链接）。"""
     # --to 的值是目录，不能进 urls；先分流再判断
     to = "0"
     urls, i = [], 0
@@ -1057,6 +1078,7 @@ def cmd_offline(a):
 
 
 def cmd_offline_list(a):
+    """查看离线下载任务进度。"""
     r = call(client().clouddownload_task_list, {"page": int(a[0]) if a else 1})
     if JSON_OUT:
         out(r)
@@ -1071,6 +1093,7 @@ def cmd_offline_list(a):
 
 
 def cmd_space(a):
+    """显示总空间、已用与剩余。"""
     # fs_storage_info = 网页端「空间」卡片，1 个请求、只读，比 tool_space 温和。
     # tool_space 是「校验空间」扫描任务，一天只能用一次，不用它查余量。
     r = call(client().fs_storage_info)
@@ -1089,6 +1112,7 @@ def cmd_space(a):
 
 
 def cmd_dup(a):
+    """全盘排重：无参数触发扫描，dup list 读取结果。"""
     # 排重必须先跑一遍扫描（tool_repeat），再取列表（tool_repeat_list）。
     # 扫描是服务端任务，耗时不定，所以拆成 dup 和 dup-list 两步。
     if a and a[0] == "list":
@@ -1116,6 +1140,7 @@ def cmd_dup(a):
 
 
 def cmd_sign(a):
+    """每日签到。需要 App 端登录态，网页 cookie 不可用。"""
     # 注意：签到接口要用 App 端 cookie，web cookie 会返回 errno 99。
     # 这里如实报错，不假装成功。
     r = call(client().user_points_sign_post)
@@ -1132,6 +1157,7 @@ def cmd_sign(a):
 
 
 def cmd_share(a):
+    """创建分享链接。"""
     if not a:
         err("用法：share <id|path...>")
     ids = [str(t) if str(t).isdigit() else resolve_item(t)[0] for t in a]
