@@ -1149,7 +1149,65 @@ def cmd_share(a):
     print("分享链接: %s" % d.get("share_url"))
     if d.get("receive_code"):
         print("提取码:   %s" % d.get("receive_code"))
-    print("\n提醒：撤销分享要回网页端「我的分享」，接口侧不可靠。")
+    code = d.get("share_code")
+    if code:
+        print("\n要撤销：p115.py share-cancel %s" % code)
+
+
+def cmd_shares(a):
+    """列出我的分享。"""
+    r = call(client().share_list, {"offset": 0, "limit": 50})
+    if not r.get("state"):
+        err("读取分享列表失败：%s" % (r.get("error") or r))
+    items = r.get("list") or []
+    if JSON_OUT:
+        out({"count": r.get("count"), "list": [
+            {k: it.get(k) for k in ("share_code", "share_title", "create_time")}
+            for it in items]})
+        return
+    print("我的分享 %s 个" % r.get("count", "?"))
+    for it in items:
+        ts = it.get("create_time")
+        when = time.strftime("%Y-%m-%d", time.localtime(ts)) if ts else "?"
+        print("  %s  %s  %s" % (it.get("share_code"), when,
+                                 (it.get("share_title") or "")[:48]))
+
+
+def cmd_share_cancel(a):
+    """撤销分享。用 share_code（不是 share_id —— 列表接口不返回 share_id）。"""
+    if not a:
+        err("用法：share-cancel <share_code...>\n  可用 share 命令查看当前分享")
+    if DRY_RUN:
+        print("[dry-run] 撤销分享：%s" % ",".join(a))
+        return
+    ok, fail = [], []
+    for code in a:
+        try:
+            r = call(client().share_update,
+                     {"share_code": code, "action": "cancel"})
+            (ok if r.get("state") else fail).append(code)
+        except RuntimeError as e:
+            fail.append("%s(%s)" % (code, e))
+    if ok:
+        print("已撤销 %d 个：%s" % (len(ok), ",".join(ok)))
+    if fail:
+        err("撤销失败：%s" % ",".join(fail))
+
+
+def cmd_points(a):
+    """查积分余额。签到接口要 App 登录态，但余额接口可用。"""
+    r = call(client().user_points_balance)
+    if JSON_OUT:
+        out(r)
+        return
+    d = r.get("data") or {}
+    print("积分余额: %s" % d.get("balance", "?"))
+    nxt = d.get("next_expire") or {}
+    if nxt.get("count"):
+        print("即将过期: %s 积分（%s）"
+              % (nxt.get("count"),
+                 time.strftime("%Y-%m-%d", time.localtime(nxt["date"]))
+                 if nxt.get("date") else "?"))
 
 
 CMDS = {
@@ -1162,6 +1220,7 @@ CMDS = {
     "url": cmd_url, "dl": cmd_dl, "up": cmd_up,
     "offline": cmd_offline, "offline-list": cmd_offline_list,
     "space": cmd_space, "dup": cmd_dup, "sign": cmd_sign, "share": cmd_share,
+    "shares": cmd_shares, "share-cancel": cmd_share_cancel, "points": cmd_points,
 }
 
 

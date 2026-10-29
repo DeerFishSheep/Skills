@@ -156,6 +156,9 @@ p115.py whoami             # 验证 + 看 cookie 签发时间
 | `dup [目录]` | 启动全盘排重扫描 | `p115.py dup` | 2 |
 | `dup list [offset]` | 取排重结果 | `p115.py dup list` | 1 |
 | `share <项...>` | 创建分享链接 | `p115.py share /图片/a.jpg` | 2+项数 |
+| `shares` | 列出我的分享 | `p115.py shares` | 1 |
+| `share-cancel <share_code...>` | 撤销分享 | `p115.py share-cancel sws2c343wpd` | 1/个 |
+| `points` | 查积分余额 | `p115.py points` | 1 |
 | `sign` | 每日签到 | `p115.py sign` | 1（见下方限制） |
 
 通用选项，加在任意命令后：
@@ -193,7 +196,13 @@ p115.py whoami             # 验证 + 看 cookie 签发时间
 
 ## 已知限制（真实存在，不要当成 bug 去修）
 
-- **`sign` 大概率失败**。签到接口 `proapi.115.com/{app}/2.0/user/points_sign` 要求 App 端登录态，网页 cookie 会返回 `errno 99`。代码已如实报错，不伪装成功。
+- **`sign` 必然失败（已实测）**。签到接口 `proapi.115.com/{app}/2.0/user/points_sign` 要求 App 端登录态。
+  实测 `app="web"` / `android` / `ios` / `115ios` / 默认，**全部返回 `请重新登录`**；
+  `user_sign`（q.115.com）直接返回 HTML 错误页。网页 cookie 无法签到。
+  代码已如实报错，不伪装成功。**要看积分用 `points`**（这个能通）。
+- **撤销分享用 `share_code`，不是 `share_id`**。`share_list` 返回的条目里 **没有 `share_id` 字段**，
+  只有 `share_code`。撤销走 `share_update(share_code=..., action="cancel")`。
+  实测完整链路：`share` → `shares` → `share-cancel` 均正常，撤销后列表立即消失。
 - **`dl` / `url` 的 UA 必须与 cookie 配对**。`download_url_web2` 会返回一对「直链 + 专用 cookie」，这个 cookie 绑定了 `user_agent` 参数。
   - 代码已固定用 `DL_UA` 常量，并显式传给接口：`download_url_web2(pc, user_agent=DL_UA)`
   - 下载时同时带 `Cookie` 和同一个 `User-Agent`
@@ -209,7 +218,7 @@ p115.py whoami             # 验证 + 看 cookie 签发时间
 
 ### ✅ 已实测跑通
 
-**只读**：`whoami` `ls` `tree` `info` `path` `search` `find` `du` `space` `rb` `dup list`
+**只读**：`whoami` `ls` `tree` `info` `path` `search` `find` `du` `space` `rb` `dup list` `shares` `points`
 
 **写入**（2026-10-29 完整跑过一轮）：
 
@@ -228,10 +237,14 @@ p115.py whoami             # 验证 + 看 cookie 签发时间
 
 ### ❌ 未实跑
 
-`offline`（离线下载）`dup`（触发扫描）`sign`（签到）`share`（分享）
+`offline`（离线下载）`dup`（触发扫描）
 
 代码已写好、方法名与 p115client 源码签名核对过，`--dry-run` 验过参数解析，但没真跑过。
 **首次真跑前先用 `--dry-run` 看一遍。**
+
+### ☠️ 不可用
+
+`sign`（签到）—— 需 App 登录态，已实测全部 app 参数均失败。要积分信息用 `points`。
 
 ### 回收站清空
 

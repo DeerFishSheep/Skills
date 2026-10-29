@@ -353,3 +353,48 @@ ck  = r["headers"]["cookie"]
 
 早期结论写成「`dl` 必然 403，是防盗链，改用浏览器下载」——**错的**。
 根因是 UA 没配对，不是防盗链。已在 SKILL.md 修正。
+
+---
+
+## 签到 / 分享实测（2026-10-29）
+
+### 签到：所有路都堵死
+
+| 尝试 | 结果 |
+|---|---|
+| `user_points_sign()` 默认 app=android | `请重新登录` |
+| `user_points_sign(app="web")` | `请重新登录` |
+| `user_points_sign(app="ios")` | `请重新登录` |
+| `user_points_sign(app="115ios")` | `请重新登录` |
+| `user_sign()`（q.115.com） | HTML 错误页，解析失败 |
+
+结论：签到接口只认 App 端登录态（`k_ec` 那一套），网页 cookie 走不通。**代码如实报错，不伪装成功。**
+
+**但找到了替代**：`user_points_balance()` 能通，返回余额 / 即将过期积分 / 兑换次数。
+已封装成 `points` 命令。
+
+### 分享：能用，且能撤销
+
+创建：`share_send({"file_ids": "..."})` → 返回 `share_url` + `receive_code` + `share_code`。
+
+**关键发现**：`share_list` 返回的条目里**没有 `share_id` 字段**（全是 `None`），
+只有 `share_code`。所以撤销不能用 share_id。
+
+撤销：`share_update({"share_code": code, "action": "cancel"})` → `state=true`。
+
+试错过程：
+- `share_update({"share_code": code})` 不带 action → `参数错误`
+- `usershare_delete({"share_code": code})` → `参数错误`
+- **`share_update({"share_code": code, "action": "cancel"})` → 成功**
+- `action: "delete"` 也可用（文档写了 cancel / delete 两种）
+
+完整链路实测通过：
+```
+share → 生成 sws2c343wpd
+shares → 列表里能看到
+share-cancel sws2c343wpd → 已撤销
+shares → 数量从 7 回到 6，已消失
+```
+
+**注意**：`share_list` 的返回字段是 `list` 不是 `data`（`data` 是 null）。
+这一点跟别的接口不一致，写代码时容易踩。
