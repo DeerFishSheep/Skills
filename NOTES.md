@@ -183,3 +183,59 @@ if str(cid) != "0" and echoed and echoed != str(cid):
 ├── .gitignore        __pycache__ / *.pyc / cookies.txt / .venv
 └── scripts/p115.py   全部 CLI 实现
 ```
+
+---
+
+## 固定安装路径与自动切换（2026-10-29 加）
+
+### 问题
+
+skill 目录可能被移动/复制，或在另一台机器、另一个对话里指向另一个副本。如果依赖装在项目内 `.venv`，换环境就找不到，调用方会误判「没装」。
+
+### 方案
+
+一切运行时产物固定放 `~/.115/`：
+
+| 内容 | 路径 |
+|---|---|
+| 数据根 | `~/.115/` |
+| venv | `~/.115/venv/` |
+| 解释器（mac/Linux） | `~/.115/venv/bin/python` |
+| 解释器（Windows） | `~/.115/venv\Scripts\python.exe` |
+| cookie | `~/.115/cookies.txt` |
+
+`~` 永远展开成当前用户家目录，跨会话、跨机器都稳定。
+
+### 自动切换 `_reexec_into_fixed_venv()`
+
+启动时检查：当前 python 有没有 p115client？没有但 `~/.115/venv` 存在 → `os.execv` 切过去重跑。
+
+这样下面三种写法结果完全一致：
+
+```bash
+python3 scripts/p115.py ls 0                 # 系统 python
+/usr/bin/python3 scripts/p115.py ls 0        # 另一个 python
+~/.115/venv/bin/python scripts/p115.py ls 0  # 直接 venv
+```
+
+用 `P115_REEXEC=1` 环境变量防递归。
+
+### 踩过的 bug：`in_fixed_venv()` 判断错误
+
+第一版用 `os.path.realpath(sys.executable) == os.path.realpath(venv_python())` 判断。**错的** —— venv 里的 `python` 本身就是指向系统 python 的 symlink，realpath 之后两边一样，Homebrew python 被误判「已在 venv 里」，于是不切换、继续报缺库。
+
+正确做法：比较 `sys.prefix`。venv 里它的值就是 venv 根目录。
+
+```python
+def in_fixed_venv():
+    return os.path.realpath(sys.prefix) == os.path.realpath(VENV_HOME)
+```
+
+### `setup` / `doctor` 两个新命令
+
+- `setup`：在固定路径建 venv + 装依赖，幂等。避开 PEP 668（Homebrew Python 有 `EXTERNALLY-MANAGED` 锁，直接 pip install 会失败）。
+- `doctor`：一次报全 —— 固定路径、venv 在不在、p115client 版本与位置、cookie、账号。**新对话接手时第一条应跑它。**
+
+### 版本号显示坑
+
+`p115client` 包里的 `__version__` 是手写的过期值（0.0.9.7.2 的包写着 `(0, 0, 9)`）。查真实版本必须用 `importlib.metadata.version("p115client")`。

@@ -7,6 +7,69 @@ description: 操作 115 网盘（列目录、递归树、搜索、重命名、�
 
 `scripts/p115.py` 是 p115client 的薄外壳。所有 115 接口调用都由 p115client 完成，本 skill 只维护：cookie 管理、限流、路径寻址、中文输出。
 
+## 🏠 固定安装路径（先看这条）
+
+**本 skill 的一切运行时产物都固定放在 `~/.115/` 下，不跟项目目录走。**
+
+这个约定是为了解决一个问题：换对话、换 agent、换机器时，调用方不知道依赖装在哪，就会以为「没装」。
+
+| 内容 | 固定路径 | 说明 |
+|---|---|---|
+| 数据目录 | `~/.115/` | 所有运行时产物的根 |
+| Python 虚拟环境 | `~/.115/venv/` | 装 p115client 的地方 |
+| venv 解释器（mac/Linux） | `~/.115/venv/bin/python` | |
+| venv 解释器（Windows） | `~/.115/venv\Scripts\python.exe` | |
+| Cookie | `~/.115/cookies.txt` | 必需，权限 600 |
+
+**为什么用 `~/.115/` 而不用项目内 `.venv`**：skill 目录可能被移动、复制，或在不同对话里指向不同副本；而 `~/.115/` 永远是当前用户的家目录，跨会话稳定。
+
+### 自动切换解释器（重要）
+
+脚本启动时会做一件事：**如果你用的 python 没装 p115client，但 `~/.115/venv` 存在，它会自动 `exec` 切到那个 venv 里的 python**，然后继续执行。
+
+所以下面这些写法**都能跑**，结果一样：
+
+```bash
+python3 scripts/p115.py ls 0                    # 系统 python，自动切
+/usr/bin/python3 scripts/p115.py ls 0           # 另一个 python，自动切
+~/.115/venv/bin/python scripts/p115.py ls 0     # 直接用 venv，不切
+```
+
+但为了省去进程替换的开销，**推荐直接用固定 venv 的 python**。
+
+## 🔍 先跑自检（任何新环境第一步）
+
+```bash
+python3 scripts/p115.py doctor
+```
+
+它会一次告诉你：固定路径在哪、venv 在不在、p115client 什么版本装在哪、cookie 找到没、账号通不通。
+
+`--json` 可输出机器可读格式：
+
+```bash
+python3 scripts/p115.py doctor --json
+```
+
+**新对话 / 新 agent 接手时，第一条命令应该是 `doctor`，不要猜。**
+
+## 📦 安装（每台机器一次）
+
+```bash
+python3 scripts/p115.py setup
+```
+
+它会自动在 `~/.115/venv` 建 venv 并装依赖，**重复执行安全**。
+
+手动等价命令：
+
+```bash
+python3 -m venv ~/.115/venv
+~/.115/venv/bin/pip install -r requirements.txt
+```
+
+**不要直接 `pip install -r requirements.txt`** —— Homebrew / 系统 Python 有 PEP 668 锁，会报 `externally-managed-environment`。必须用 venv。
+
 ## ⚠️ 限流铁律（先看这条）
 
 **115 后端最多每秒 2 次请求。超了返回 HTTP 405，并封禁数分钟。**
@@ -48,6 +111,8 @@ p115.py whoami             # 验证 + 看 cookie 签发时间
 
 | 命令 | 用途 | 示例 | 请求数 |
 |---|---|---|---|
+| `doctor` | **自检**：路径/依赖/cookie/账号 | `p115.py doctor` | 0–1 |
+| `setup` | **安装**：在固定路径建 venv 装依赖 | `p115.py setup` | 0（不走 115 接口） |
 | `whoami` | 账号 + cookie 状态 | `p115.py whoami` | 1 |
 | `ls [目标] [offset] [limit]` | 列目录 | `p115.py ls 0` | 1 |
 | `tree [目标] [深度]` | 递归列目录，完整翻页 | `p115.py tree /图片 2` | 目录数 ≈ 请求数 |
@@ -146,9 +211,9 @@ p115.py whoami             # 验证 + 看 cookie 签发时间
 ## 安装
 
 ```bash
-pip install -r requirements.txt
-python scripts/p115.py login     # 或 set-cookie
-python scripts/p115.py whoami    # 验证
+python3 scripts/p115.py setup     # 在 ~/.115/venv 建环境装依赖，幂等
+python3 scripts/p115.py login     # 或 set-cookie
+python3 scripts/p115.py doctor    # 验证一切就绪
 ```
 
 维护细节、抓包结论、踩坑记录见 `NOTES.md`。

@@ -25,6 +25,64 @@ ASSUME_YES = "--yes" in sys.argv
 COOKIE_HOME = os.path.expanduser("~/.115")
 IOS_CK = "/var/minis/shared/115/cookies.txt"
 
+# ===== 固定安装路径（跨平台）=====
+# 本 skill 的一切运行时产物都固定放在 ~/.115/ 下，不跟项目目录走。
+# 好处：换对话、换 agent、换机器，只要看这一个目录就知道装没装、装在哪。
+#
+#   ~/.115/cookies.txt           cookie（必需）
+#   ~/.115/venv/                 Python 虚拟环境（装 p115client 的地方）
+#     macOS / Linux:  ~/.115/venv/bin/python
+#     Windows:        ~/.115/venv/Scripts/python.exe
+#
+# 用一个固定路径而不是项目内 .venv，是因为 skill 目录可能被移动、复制、
+# 或在不同对话里指向不同副本；而 ~/.115/ 永远是当前用户的家目录，跨会话稳定。
+RUNTIME_HOME = COOKIE_HOME          # 别名，语义更清楚
+VENV_HOME = os.path.join(RUNTIME_HOME, "venv")
+
+
+def venv_python():
+    """返回固定 venv 里的 python 路径（不保证存在，只给路径）。"""
+    if os.name == "nt":
+        return os.path.join(VENV_HOME, "Scripts", "python.exe")
+    return os.path.join(VENV_HOME, "bin", "python")
+
+
+def in_fixed_venv():
+    """当前解释器是否跑在固定 venv 里。
+
+    不能用 realpath 比较 sys.executable —— venv 里的 python 本身就是个
+    指向系统 python 的 symlink，realpath 之后两边一模样，会误判为“在 venv 里”。
+    sys.prefix 才是可靠依据：venv 里它的值就是 venv 根目录。
+    """
+    try:
+        return os.path.realpath(sys.prefix) == os.path.realpath(VENV_HOME)
+    except OSError:
+        return False
+
+
+def p115client_info():
+    """查 p115client 装没装、什么版本、装在哪。返回 dict。
+
+    版本优先用 importlib.metadata，因为包里的 __version__ 是过期手写值
+    （0.0.9.7.2 的包 __version__ 还写着 (0,0,9)）。
+    """
+    try:
+        import p115client as m
+    except ImportError:
+        return {"installed": False}
+    ver = None
+    try:
+        from importlib.metadata import version
+        ver = version("p115client")
+    except Exception:
+        pass
+    if not ver:
+        ver = getattr(m, "__version__", "unknown")
+        if isinstance(ver, tuple):
+            ver = ".".join(str(x) for x in ver)
+    return {"installed": True, "version": str(ver),
+            "location": os.path.dirname(os.path.abspath(m.__file__))}
+
 # 断线重连般的模糊错误，重试一次通常就好
 TRANSIENT = ("405", "429", "500", "502", "503", "504", "timeout", "timed out")
 
@@ -417,6 +475,122 @@ def cmd_setcookie(a):
         err("用法：set-cookie '<k=v; k=v>'")
     dst = save_cookie(a[0])
     print("已保存 → %s（已去重重名 cookie）" % dst)
+
+
+def cmd_doctor(a):
+    """自检：安装位置、依赖、cookie、账号，一次看全。
+
+    这是给「新对话 / 新 agent」用的入口 —— 它不需要猜东西装在哪。
+    """
+    info = {
+        "runtime_home": RUNTIME_HOME,
+        "venv_home": VENV_HOME,
+        "venv_python": venv_python(),
+        "venv_exists": os.path.isdir(VENV_HOME),
+        "running_in_fixed_venv": in_fixed_venv(),
+        "current_python": sys.executable,
+        "p115client": p115client_info(),
+    }
+    cp = cookie_path()
+    info["cookie_path"] = cp
+    info["cookie_exists"] = bool(cp)
+
+    # 账号探测（仅当依赖和 cookie 都就绪时）
+    if info["p115client"].get("installed") and cp:
+        try:
+            r = call(client().user_my)
+            d = (r or {}).get("data") or {}
+            info["account"] = {"ok": bool((r or {}).get("state")),
+                               "user_name": d.get("user_name"),
+                               "vip": d.get("vip")}
+        except (RuntimeError, SystemExit) as e:
+            info["account"] = {"ok": False, "error": str(e)}
+    else:
+        info["account"] = {"ok": False, "error": "前置条件未满足"}
+
+    if JSON_OUT:
+        out(info)
+        return
+
+    ok = info["p115client"].get("installed")
+    print("─── 115 skill 自检 ───")
+    print("固定数据目录: %s" % RUNTIME_HOME)
+    print("固定 venv:    %s  %s" % (VENV_HOME, "✓ 存在" if info["venv_exists"] else "✗ 不存在"))
+    print("venv python:  %s" % venv_python())
+    print("当前解释器:   %s" % sys.executable)
+    if info["venv_exists"] and not info["running_in_fixed_venv"]:
+        print("  ⚠ 你现在没用固定 venv 跑。建议改用：")
+        print("     %s scripts/p115.py <命令>" % venv_python())
+    print()
+    if ok:
+        p = info["p115client"]
+        print("p115client:   ✓ %s" % p["version"])
+        print("  位置:       %s" % p["location"])
+    else:
+        print("p115client:   ✗ 未安装")
+        print("  修复:       %s scripts/p115.py setup" % sys.executable)
+    print()
+    if info["cookie_exists"]:
+        print("cookie:       ✓ %s" % cp)
+    else:
+        print("cookie:       ✗ 未找到")
+        print("  修复:       %s scripts/p115.py login" % sys.executable)
+    print()
+    acc = info["account"]
+    if acc.get("ok"):
+        print("账号:         ✓ %s (VIP=%s)" % (acc.get("user_name"), acc.get("vip")))
+    else:
+        print("账号:         ✗ %s" % acc.get("error"))
+    print()
+    if ok and info["cookie_exists"] and acc.get("ok"):
+        print("✓ 一切就绪，可以用了。")
+    else:
+        print("✗ 还有问题，按上面的修复提示处理。")
+
+
+def cmd_setup(a):
+    """一键安装：在固定路径 ~/.115/venv 建 venv 并装依赖。
+
+    跨平台，不需要 agent 自己拼命令。重复执行是安全的。
+    """
+    import subprocess
+    import venv as venv_mod
+
+    py = venv_python()
+    print("固定安装位置: %s" % VENV_HOME)
+
+    if not os.path.exists(py):
+        print("→ 创建虚拟环境…")
+        try:
+            venv_mod.EnvBuilder(with_pip=True, symlinks=(os.name != "nt")).create(VENV_HOME)
+        except Exception as e:
+            err("创建 venv 失败：%s\n  可尝试手动：%s -m venv %s"
+                % (e, sys.executable, VENV_HOME))
+        if not os.path.exists(py):
+            err("venv 建完了但找不到 python：%s" % py)
+    else:
+        print("→ 虚拟环境已存在，跳过创建")
+
+    print("→ 安装依赖…")
+    r = subprocess.run([py, "-m", "pip", "install", "-q", "--upgrade",
+                        "p115client>=0.0.9.7.2", "browser-cookie3>=0.20.1"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        err("依赖安装失败：\n%s" % (r.stderr or r.stdout)[-1200:])
+
+    info = p115client_info() if in_fixed_venv() else None
+    print("→ 验证…")
+    v = subprocess.run([py, "-c", "import p115client,sys;print(p115client.__version__)"],
+                       capture_output=True, text=True)
+    if v.returncode != 0:
+        err("验证失败：\n%s" % (v.stderr or v.stdout)[-800:])
+    print("✓ 完成。p115client %s" % v.stdout.strip())
+    print()
+    print("以后请用这个解释器调本 skill：")
+    print("  %s scripts/p115.py <命令>" % py)
+    if not cookie_path():
+        print("\n还差 cookie，跑：")
+        print("  %s scripts/p115.py login" % py)
 
 
 def cmd_whoami(a):
@@ -897,6 +1071,7 @@ def cmd_share(a):
 
 
 CMDS = {
+    "setup": cmd_setup, "doctor": cmd_doctor,
     "login": cmd_login, "set-cookie": cmd_setcookie, "whoami": cmd_whoami,
     "ls": cmd_ls, "tree": cmd_tree, "info": cmd_info, "path": cmd_path,
     "search": cmd_search, "find": cmd_find, "du": cmd_du,
@@ -908,7 +1083,39 @@ CMDS = {
 }
 
 
+def _reexec_into_fixed_venv():
+    """如果当前解释器不是固定 venv，但固定 venv 存在，就自动切过去。
+
+    这是为了「换对话 / 换 agent 就以为没装」这个问题：无论调用方用的哪个
+    python，只要 ~/.115/venv 在，就无感切到那里，不会因为缺库而报错。
+    用环境变量防递归。
+    """
+    if os.environ.get("P115_REEXEC") == "1":
+        return
+    if in_fixed_venv():
+        return
+    py = venv_python()
+    if not os.path.exists(py):
+        return
+    # 只有在当前环境确实缺 p115client 时才切，避免多余的进程替换
+    try:
+        import p115client  # noqa: F401
+        return
+    except ImportError:
+        pass
+    os.environ["P115_REEXEC"] = "1"
+    argv = [py, os.path.abspath(__file__)] + sys.argv[1:]
+    try:
+        if os.name == "nt":
+            import subprocess
+            sys.exit(subprocess.call(argv))
+        os.execv(py, argv)
+    except OSError:
+        os.environ.pop("P115_REEXEC", None)
+
+
 def main():
+    _reexec_into_fixed_venv()
     args = sys.argv[1:]
     if not args or args[0] in ("-h", "--help", "help"):
         print(__doc__.strip())
