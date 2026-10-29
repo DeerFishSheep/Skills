@@ -1,195 +1,154 @@
 ---
 name: 115-pan
-description: 操作 115 网盘（列目录、递归树、搜索、路径寻址、重命名、移动、复制、删除、回收站、分享、下载直链）。当用户提到 115 网盘、115 文件管理、云端文件整理、批量改名/移动/删除、查回收站、拿下载链接时使用。
+description: 操作 115 网盘（列目录、递归树、搜索、重命名、移动、复制、删除、回收站、上传、下载直链、离线下载、空间、排重、分享、签到）。当用户提到 115 网盘、115 文件管理、云端文件整理、批量改名/移动/删除、查回收站、上传下载文件到 115、磁力离线到 115 时使用。
 ---
 
-# 115 网盘操作
+# 115 网盘 CLI
 
-跨平台通用 skill。基于 `webapi.115.com`，Cookie 认证，明文 JSON。
+`scripts/p115.py` 是 p115client 的薄外壳。所有 115 接口调用都由 p115client 完成，本 skill 只维护：cookie 管理、限流、路径寻址、中文输出。
 
-> ## ⚠️ 限流铁律：每秒最多 2 次请求
->
-> 115 接口有**强限流**，超过约 2 次/秒会直接返回 **HTTP 405**（返回 HTML 错误页而不是 JSON），
-> 而且会**持续几分钟才恢复**。恢复期间所有 `/files` 类接口全部不可用。
->
-> - 脚本内置全局限流器 `_throttle()`：任意两次请求间隔 ≥ `MIN_INTERVAL`（1.0s），
->   **严格 1 次/秒**。所有请求都自动排队，不需要调用方自己 sleep。
-> - **写调用方代码时不要再额外并发或循环狂打**。不要为了探测而连续试参数——
->   我干过这事，一次就把接口打成 405 了。
-> - 调试/探索新接口时，**每次请求之间手动 sleep ≥ 1 秒**，并且一次只变一个变量。
-> - 碰 405 立刻停，等 **5 分钟**再试。继续打只会延长封禁时间。
-> - 遍历大目录（翻页）是最容易触发限流的场景，`tree` / `du` / `find` 天然要发很多请求，
->   跑之前先想清楚，别在大目录上反复跑。
+## ⚠️ 限流铁律（先看这条）
 
-## 一、认证（按优先级自动尝试）
+**115 后端最多每秒 2 次请求。超了返回 HTTP 405，并封禁数分钟。**
 
-脚本按以下顺序取 Cookie，命中即用：
+本脚本已经内置 `call()` 包装器，**每次 p115client 调用间隔 ≥ 1 秒**，你不需要自己 sleep。
+但你必须知道：
+
+- **不要并发跑命令。** 两个 `p115.py tree` 同时跑 = 每秒 2 次 = 直接 405。
+- **命令之间有代价。** `tree` 深度 3 可能发几十次请求 = 几十秒。预算见下方命令表。
+- **看到 405 就是限流，不是登录问题。** 停手等 3-5 分钟。继续重试只会延长封禁。
+- **405 和登录失效容易混。** 405 是 HTML 错误页；登录失效是 JSON 里 `errno` 为 `990001` 或 `99`。
+
+## Cookie（三种来源 + 去重坑）
+
+认证优先级，找到就用：
 
 1. 环境变量 `P115_COOKIE` —— 一行 `k=v; k=v`
-2. 环境变量 `P115_COOKIE_FILE` —— Cookie 文件路径
-3. 当前目录 `cookies.txt`
+2. 环境变量 `P115_COOKIE_FILE` —— 文件路径
+3. `./cookies.txt`
 4. `~/.115/cookies.txt`
 5. `/var/minis/shared/115/cookies.txt`（iOS Minis）
 
-### 获取 Cookie 的三种方式
-
-**A. 从本机浏览器自动读取（桌面端推荐）**
-```bash
-pip install browser-cookie3
-python3 scripts/p115.py login            # 自动探测 chrome/edge/brave/safari/firefox
-python3 scripts/p115.py login chrome     # 或指定浏览器
-```
-前提：该浏览器已登录 115.com。
-
-**B. 环境变量（通用，适合 Agent 注入）**
-```bash
-export P115_COOKIE='UID=xxx; CID=xxx; KID=xxx; SEID=xxx'
-```
-
-**C. 手动保存**
-```bash
-python3 scripts/p115.py set-cookie 'UID=xxx; CID=xxx; KID=xxx; SEID=xxx'
-```
-
-必需 Cookie 键：`UID`、`CID`、`KID`、`SEID`（`acw_tc`、`115_lang` 可选）。
-
-> **重名 Cookie 会被自动去重。** browser_cookie3 会把每个子域（`yun.115.com`、`act.115.com`…）
-> 的 `acw_tc` 全导进来，一条请求里出现十几个同名 cookie 会让服务端解析异常。
-> `dedupe_cookie()` 只保留每个键第一次出现的值，`login` / `set-cookie` 落盘前都会过一遍。
-
-## 二、通用选项
-
-任意命令都可加：
-
-| 选项 | 作用 |
-|---|---|
-| `--json` | 输出原始 JSON，给 agent / 管道 / jq 用 |
-| `--dry-run` | 写操作只打印将要做什么，不真改 |
-| `--yes` | `purge` 的二次确认 |
-
-## 三、路径寻址（重要）
-
-**凡是接受 `<id>` 的地方，都可以直接写路径**，不用记十九位 cid：
+导入方式：
 
 ```bash
-p115.py ls "/🎬电影区"              # 根目录下的电影区
-p115.py ls "/🎬电影区/蜘蛛侠：崭新之日 (2026)"   # 多级路径
-p115.py ls 2956148449000553774      # 数字 id 照旧可用
-p115.py ls 0                        # 根目录
+p115.py login              # 从浏览器自动嗅探（chrome → edge → brave → …）
+p115.py login safari       # 指定浏览器
+p115.py set-cookie '<k=v; ...>'   # 手动传
+p115.py whoami             # 验证 + 看 cookie 签发时间
 ```
 
-`rename` / `mv` / `cp` / `rm` / `url` / `info` / `share` 全部支持路径。
+**去重坑（真实存在）**：`browser_cookie3` 会把各子域同名 cookie 全导进来，实测出现 **18 个同名 `acw_tc`**，服务端解析异常。本脚本在 cookie 进 client 之前已去重（保留第一次出现），你不用管。手工拼 cookie 时也别重复。
 
-## 四、命令
+**UID 末段是签发时间，不是过期时间。** `UID=<uid>_<tag>_<ts>` 里的 `ts` 是签发时刻。115 不公开真实过期时间，别再拿它算「还剩几天」。
+
+## 命令速查
+
+请求数按实测/源码推算给出，用于判断一次操作要等多久。
+
+| 命令 | 用途 | 示例 | 请求数 |
+|---|---|---|---|
+| `whoami` | 账号 + cookie 状态 | `p115.py whoami` | 1 |
+| `ls [目标] [offset] [limit]` | 列目录 | `p115.py ls 0` | 1 |
+| `tree [目标] [深度]` | 递归列目录，完整翻页 | `p115.py tree /图片 2` | 目录数 ≈ 请求数 |
+| `info <id\|path>` | 单个条目详情 | `p115.py info /图片/a.jpg` | 1–2 |
+| `path <id>` | 由 id 反查完整路径 | `p115.py path 2956275452366290775` | 2 |
+| `search <关键字>` | 全局搜索 | `p115.py search 蜘蛛侠` | 1 |
+| `find <关键字> [目标]` | 在目录树里按名递归找 | `p115.py find 蜘蛛侠 /🎬电影区` | 遍历到的目录数 |
+| `du [目标]` | 统计占用 | `p115.py du /🎬电影区` | 遍历到的目录数（深） |
+| `space` | 总空间/已用/剩余 | `p115.py space` | 1 |
+| `mkdir <父> <名称>` | 新建文件夹 | `p115.py mkdir /其他 备份` | 2 |
+| `rename <目标> <新名>` | 重命名 | `p115.py rename /其他/备份 备份2` | 2–3 |
+| `mv <目标目录> <项...>` | 移动 | `p115.py mv /其他 /图片/a.jpg` | 2+项数 |
+| `cp <目标目录> <项...>` | 复制 | `p115.py cp /其他 /图片/a.jpg` | 2+项数 |
+| `rm <项...>` | 删除（进回收站） | `p115.py rm /其他/备份2` | 2+项数 |
+| `rb [offset]` | 看回收站 | `p115.py rb` | 1 |
+| `restore <rid...>` | 从回收站还原 | `p115.py restore 3550645885618619647` | 1 |
+| `url <目标>` | 取可下载直链 | `p115.py url /图片/a.jpg` | 2 |
+| `dl <目标> [输出目录]` | 下载到本地 | `p115.py dl /图片/a.jpg ./tmp` | 2 + CDN 流量（⚠ 见已知限制） |
+| `up <本地文件> [目标目录]` | 上传 | `p115.py up ./a.zip /其他` | 2（分片走 OSS 不计限流） |
+| `offline <链接...> [--to 目录]` | 离线下载 | `p115.py offline 'magnet:?xt=...' --to /云下载` | 2 |
+| `offline-list [page]` | 看离线任务进度 | `p115.py offline-list` | 1 |
+| `dup [目录]` | 启动全盘排重扫描 | `p115.py dup` | 2 |
+| `dup list [offset]` | 取排重结果 | `p115.py dup list` | 1 |
+| `share <项...>` | 创建分享链接 | `p115.py share /图片/a.jpg` | 2+项数 |
+| `sign` | 每日签到 | `p115.py sign` | 1（见下方限制） |
+
+通用选项，加在任意命令后：
+
+- `--json` —— 输出原始 JSON，给管道/agent 解析用
+- `--dry-run` —— 写操作只打印不执行（mkdir/rename/mv/cp/rm/up/offline/share/dl 都支持）
+- `--yes` —— 危险操作跳过二次确认（非交互环境必须加）
+
+## 路径寻址
+
+凡是参数写成 `<id|path>` 的地方，以下四种写法等价可用：
+
+```
+0                      根目录
+/🎬电影区               根目录下的目录（带不带前导 / 都行）
+/🎬电影区/蜘蛛侠：崭新之日   多级路径
+2956148449000553774    直接给数字 id（最快，省掉解析请求）
+```
+
+**用 id 比用路径省请求。** 路径要 1 次 `getid`（服务端查不到时本地逐级 `ls`，更贵）；id 直接命中。
+
+**假 cid 坑（已修）**：115 对不存在的 cid **静默返回根目录**，不报错。旧实现照单全收，打错一位就看到根目录还以为成功了。本脚本会比对响应里的 `cid` 回显，不匹配直接报「目录不存在」。如果你自己写脚本调 115 接口，务必做同样的校验。
+
+## 错误码对照
+
+| 现象 | 含义 | 怎么办 |
+|---|---|---|
+| HTTP **405**（HTML 错误页） | 触发限流 | 停 3–5 分钟，确认没有并发进程。不要重试加固 |
+| `errno 99` / **990001** 登录超时 | cookie 失效 | `p115.py login` 重新导入 |
+| `errno 99` + `k_ec` 相关 | 该接口是 App 接口，要加密参数 | 换 web 端接口。本 skill 不用 App 接口 |
+| **990009** 操作尚未执行完成 | 上一个删除/还原/复制还在跑 | 等几秒再执行 |
+| **231011** 文件已删除 | 目标已不存在 | `p115.py rb` 看回收站 |
+| 空间不足 | 网盘满了 | `p115.py space` 看余量 |
+| 取直链 `errno 99` | App 版 `download_url` 不可用 | 已在代码里改用 web 版 `download_url_web2`，正常路径不会撞到 |
+
+## 已知限制（真实存在，不要当成 bug 去修）
+
+- **`sign` 大概率失败**。签到接口 `proapi.115.com/{app}/2.0/user/points_sign` 要求 App 端登录态，网页 cookie 会返回 `errno 99`。代码已如实报错，不伪装成功。
+- **`dl` 实测 403，`url` 可用。** 直链本身拿得到（`url` 命令实测通过，可复制到浏览器/迅雷下载），但脚本直接 GET CDN 会 403 —— 已实测 8 种 UA / cookie / Range 组合全部 403，是 115 的防盗链，不是代码问题。所以：**要下载就用 `url` 拿链接交给浏览器，不要指望 `dl`。**
+- **删除只能进回收站。** 115 没有「按文件 id 彻底删除」的公开接口，本工具不提供 `purge`。要彻底清空请 rm 后在网页端回收站操作。
+- **回收站彻底删除需要安全密钥。** `recyclebin_clean2` 用默认 `000000` 会报「安全密钥错误」。README 里不猜用户密码。
+- **`offline` 对无效链接直接拒绝**，返回「错误的链接」。磁力链要带完整 `magnet:?xt=urn:btih:...`。
+- **`dup` 是两段式。** 先 `dup` 触发服务端全盘扫描（耗时不定），再 `dup list` 取结果。扫描是一次性的，不要反复触发。
+- **`du` 和 `find` 深度上限分别是 8 和 6。** 更深的树会静默截断，防止请求数爆炸。
+
+## 未验证命令
+
+以下命令代码已写好、方法名与 p115client 源码签名核对过，但**没有实跑过**（涉及写入用户网盘或需要特定条件）：`mkdir` `rename` `mv` `cp` `rm` `restore` `up` `offline` `dup` `sign` `share`。
+
+已完成 `--dry-run` 验证（参数解析、路径寻址均正确）：`mkdir` `up` `offline`。
+
+实测**跑通**的是：`whoami` `ls` `tree` `info` `path` `search` `find` `du` `space` `rb` `url` `dl`（`dl` 卡在 CDN 403，直链获取本身正常）、`dup list`。
+
+未验证的命令先用 `--dry-run` 看要做什么，再加 `--yes` 真跑。
+
+## 接口源库
+
+本 skill 不复制上游代码，全部 115 接口调用通过 p115client 完成：
+
+- PyPI: https://pypi.org/project/p115client/
+- 源码: https://github.com/ChenyangGao/p115client
+- 作者: ChenyangGao
+- 许可: MIT
+- 实际使用版本: 0.0.9.7.2
+- 关键传递依赖: p115cipher（加解密）、p115oss（上传）、p115pickcode（id 转换）
+
+安装：pip install -r requirements.txt
+
+本仓库只维护：CLI 外壳、cookie 管理与去重、全局节流、路径寻址、中文输出。
+接口层的 bug 与更新归上游项目。
+
+## 安装
 
 ```bash
-P=scripts/p115.py
-
-python3 $P login [browser]        # 从浏览器导入 cookie
-python3 $P set-cookie '<cookie>'  # 手动保存
-python3 $P whoami                 # 账号 + cookie 签发时间 + 来源
-python3 $P ls [cid|path] [off] [lim]     # 列目录（默认根）
-python3 $P tree [cid|path] [depth]       # 递归树（完整翻页，带统计）
-python3 $P info <id|path>         # 条目详情（原始字段）
-python3 $P path <id>              # 反查完整路径
-python3 $P search <关键字>         # 全局搜索（跨整个盘）
-python3 $P find <关键字> [cid|path]  # 在指定目录下递归找
-python3 $P du [cid|path]          # 统计目录占用
-python3 $P mkdir <父cid|path> <名称>
-python3 $P rename <id|path> <新名> [--dry-run]
-python3 $P mv <目标cid|path> <id|path...>
-python3 $P cp <目标cid|path> <id|path...>
-python3 $P rm <id|path...>        # 删除进回收站（可恢复）
-python3 $P purge <id...> --yes    # 彻底删除（不可恢复）
-python3 $P rb                     # 列出回收站
-python3 $P restore <rid...>       # 从回收站还原
-python3 $P url <id|path>          # 拿下载直链
-python3 $P share <id|path...>     # 创建分享链接
-python3 $P dl <id|path> [输出目录] # 下载文件
+pip install -r requirements.txt
+python scripts/p115.py login     # 或 set-cookie
+python scripts/p115.py whoami    # 验证
 ```
 
-## 五、接口对照（webapi.115.com）
-
-| 操作 | 方法 | 路径 | 关键参数 |
-|------|------|------|----------|
-| 列目录 | GET | /files | cid,offset,limit,show_dir,o,asc,aid=1,natsort=1 |
-| 详情 | GET | /files/get_info | file_id |
-| 搜索 | GET | /files/search | search_value,cid=0,type=0 |
-| 新建目录 | POST | /files/add | pid,cname |
-| 重命名 | POST | /files/batch_rename | files_new_name[fid]=name |
-| 移动 | POST | /files/move | pid=目标cid,fid[0]=,... |
-| 复制 | POST | /files/copy | pid=目标cid,fid[0]=,... |
-| 删除 | POST | /rb/delete | fid[0]=,... |
-| 回收站 | GET | /rb | aid=1,cid=0,offset,limit |
-| 还原 | POST | /rb/revert | rid[0]=,... （注意是 rid 不是 fid） |
-| 下载直链 | GET | /files/download | pickcode=**pc 字段** |
-| 创建分享 | POST | /share/send | file_ids（逗号分隔）,ignore_warn=1,is_share=1 |
-| 账号 | GET | /user/info | - |
-
-通用参数：`aid=1` 固定，`cid=0` 为根目录。
-
-## 六、关键返回字段
-
-- 目录：`cid`（目录ID）、`n`（名称）、`pid`（父ID）、`t`（修改时间戳）、`pc`（pickcode）
-- 文件：`fid`（文件ID）、`n`、`s`（字节大小）、`sha`（哈希）、`pc`（pickcode）
-- 判断目录：有 `cid` 且无 `fid`
-- 列目录响应的 `path` 字段：完整祖先链，可直接用于反查路径
-- 回收站：`id`（还原时作 `rid`）/`file_name`/`type`/`file_size`/`parent_name`
-
-## 七、已验证结论
-
-### 2026-09-20 首轮实测
-- 115 客户端 HAR 里的 Cookie 可直接用于 webapi.115.com（会话共用）
-- 列目录 / 账号 / 新建 / 重命名 / 移动 / 删除 全部返回 `state=true`
-- 删除走 `/rb/delete`，进回收站，非彻底删除
-- 复制 / 还原 / 回收站列表 均已实测通过
-
-### 2026-10-29 加固与扩展
-- **不存在的 cid 会静默返回根目录**（`state=true, cid=0`）。`_items()` 现在对比回显 cid，
-  不一致直接报错。这是最危险的坑：打错一位会看到根目录还以为是成功了。
-- **`tree` 现在完整翻页**，旧版只取首页 115 条会静默截断。
-- **`UID=<uid>_<tag>_<ts>` 里的 ts 是签发时间，不是过期时间**。旧版 `whoami` 把它当过期时间，
-  刚登录也显示 `-1 days left`。现已改为显示"签发于 N 小时前"。
-- **`/files/download?pickcode=<pc>` 可拿到 `file_url` 直链**（VIP 账号验证通过）。
-- **直链直接 GET 会被 CDN 403**：响应体是 `{"message":"no cookie value","status":403}`，
-  `Server: AliyunOSS`。带全 cookie、换 UA、加 Range、改 Referer 全部无效 —— 说明 115 的 CDN
-  需要客户端签名，不是普通 Cookie 能过的。**直链可复制到浏览器/迅雷/IDM 用，程序直接下载不通。**
-- **`/share/send` 可用**，返回 `share_url`（`https://115cdn.com/s/xxxx`）+ `receive_code`。
-  但**响应里没有 `share_id`**，且 `/share/delete`、`/share/cancel`、`/share/list` 全部返回
-  `服务器开小差了` —— 分享只能用网页端撤销。
-- **`/files/upload/init`（秒传）不可用**：返回 `服务器开小差了`。上传未实现。
-- **`/files/getpathinfo` 不可用**（同上）。路径反查改用「父目录 list 的 `path` 字段」，
-  已实现为 `path` 命令。
-- **`/rb/clean` 返回 `密钥错误`**，彻底清空回收站的接口未打通。`purge` 只做到删进回收站。
-- **`/files` 接口有强限流**：**每秒最多 2 次请求**，超了返回 HTTP 405（HTML 错误页，不是 JSON），
-  并持续数分钟。脚本内置 `_throttle()` 全局限流器（间隔 1.0s，严格 1 次/秒），
-  并对 405/429/5xx 做指数退避重试（2s/4s/6s）。
-  - 405 可能会被误认为“参数错”或“接口挂”，**实际是限流**。
-  - 触发后需冷却 **5 分钟以上**；继续请求会延长封禁。
-  - 探索新接口时必须手动 sleep ≥ 1s，且一次只变一个变量。
-
-## 八、安全约定
-
-- 写操作（rename/mv/cp/rm/mkdir）建议先加 `--dry-run` 看一遍
-- 删除默认只进回收站；`purge` 需要 `--yes`，且只能删进回收站（彻底删除接口未打通）
-- Cookie 文件权限必须 600，禁止提交到任何仓库
-- 环境变量名必须是 `P115_COOKIE`（不能以数字开头）
-- **`url` 拿到的直链含账号凭证，不要贴到公开场合**
-
-## 九、依赖
-
-- Python 3，标准库即可（urllib/ssl/json/unicodedata）
-- 可选：`browser-cookie3`（仅 `login` 从浏览器导入时需要）
-  - 推荐装在独立 venv，避开 PEP 668：`python3 -m venv ~/.115/venv && ~/.115/venv/bin/pip install browser-cookie3`
-  - Windows 新版 Chrome App-Bound 加密可能读不出，退回方式 B/C
-  - macOS 读 Chrome/Safari 会弹 Keychain 授权，放行即可
-  - Safari 需要「完全磁盘访问权限」，否则 `PermissionError`
-
-## 十、仍未实现
-
-- **上传**（秒传接口返回错误，普通分片上传未探索）
-- **离线下载**（`/offline/add_task_urls` 未实测）
-- **分享删除/管理**（接口全挂，只能网页端操作）
-- **彻底删除 / 清空回收站**（`/rb/clean` 密钥错误）
-- **目录打包下载**（`/files/download` 对目录返回「文件上传不完整」）
-- **程序内直链下载**（CDN 防盗链，见上文）
+维护细节、抓包结论、踩坑记录见 `NOTES.md`。
