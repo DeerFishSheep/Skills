@@ -22,33 +22,42 @@ JSON_OUT = "--json" in sys.argv
 DRY_RUN = "--dry-run" in sys.argv
 ASSUME_YES = "--yes" in sys.argv
 
-COOKIE_HOME = os.path.expanduser("~/.115")
-IOS_CK = "/var/minis/shared/115/cookies.txt"
+# ===== 安装路径：跟 skill 目录走（自包含）=====
+# 本 skill 的一切运行时产物都放在 **skill 自己的根目录**下：
+#
+#   <SKILL_DIR>/.venv/             Python 虚拟环境（装 p115client）
+#     macOS / Linux:  .venv/bin/python
+#     Windows:        .venv/Scripts/python.exe
+#   <SKILL_DIR>/cookies.txt        cookie（权限 600）
+#   <SKILL_DIR>/.setup-state.json  安装元数据（记录来自哪个路径）
+#
+# 这样 skill 装到哪，依赖就跟到哪：
+#   ~/.agents/skills/115-Pan-Skill/.venv/
+#   /opt/skills/115-Pan-Skill/.venv/
+# 整份目录直接拷走就能用（venv 不跨机器，但路径约定和自动重建都在）。
+#
+# 注意：venv 内部写死绝对路径，所以 skill 目录**被移动**后 venv 会失效。
+# setup 与 doctor 会检测这种“路径漂移”并提示重建。
+SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RUNTIME_HOME = SKILL_DIR
+VENV_HOME = os.path.join(SKILL_DIR, ".venv")
+COOKIE_HOME = SKILL_DIR
+STATE_FILE = os.path.join(SKILL_DIR, ".setup-state.json")
 
-# ===== 固定安装路径（跨平台）=====
-# 本 skill 的一切运行时产物都固定放在 ~/.115/ 下，不跟项目目录走。
-# 好处：换对话、换 agent、换机器，只要看这一个目录就知道装没装、装在哪。
-#
-#   ~/.115/cookies.txt           cookie（必需）
-#   ~/.115/venv/                 Python 虚拟环境（装 p115client 的地方）
-#     macOS / Linux:  ~/.115/venv/bin/python
-#     Windows:        ~/.115/venv/Scripts/python.exe
-#
-# 用一个固定路径而不是项目内 .venv，是因为 skill 目录可能被移动、复制、
-# 或在不同对话里指向不同副本；而 ~/.115/ 永远是当前用户的家目录，跨会话稳定。
-RUNTIME_HOME = COOKIE_HOME          # 别名，语义更清楚
-VENV_HOME = os.path.join(RUNTIME_HOME, "venv")
+# 兼容旧版装在 ~/.115 的用户：那里有 cookie 就当备用来源
+LEGACY_COOKIE_HOME = os.path.expanduser("~/.115")
+IOS_CK = "/var/minis/shared/115/cookies.txt"
 
 
 def venv_python():
-    """返回固定 venv 里的 python 路径（不保证存在，只给路径）。"""
+    """返回 venv 里的 python 路径（不保证存在，只给路径）。"""
     if os.name == "nt":
         return os.path.join(VENV_HOME, "Scripts", "python.exe")
     return os.path.join(VENV_HOME, "bin", "python")
 
 
 def in_fixed_venv():
-    """当前解释器是否跑在固定 venv 里。
+    """当前解释器是否跑在本 skill 的 venv 里。
 
     不能用 realpath 比较 sys.executable —— venv 里的 python 本身就是个
     指向系统 python 的 symlink，realpath 之后两边一模样，会误判为“在 venv 里”。
@@ -58,6 +67,31 @@ def in_fixed_venv():
         return os.path.realpath(sys.prefix) == os.path.realpath(VENV_HOME)
     except OSError:
         return False
+
+
+def venv_is_stale():
+    """venv 是否存在但“路径漂移”（skill 目录被搬过）。
+
+    venv 里的 pyvenv.cfg 和脚本 shebang 写死了绝对路径，目录一搬就不对。
+    检测方式：venv/python 存在，且 sys.prefix 指向的目录已经不是当前 VENV_HOME。
+    """
+    py = venv_python()
+    if not os.path.exists(py):
+        return False
+    cfg = os.path.join(VENV_HOME, "pyvenv.cfg")
+    if not os.path.exists(cfg):
+        return False
+    try:
+        for line in open(cfg, encoding="utf-8", errors="replace"):
+            if line.startswith("command"):
+                # command = /原路径/... -m venv /原路径
+                parts = line.split()
+                if parts and os.path.isabs(parts[-1]):
+                    if os.path.realpath(parts[-1]) != os.path.realpath(VENV_HOME):
+                        return True
+    except OSError:
+        pass
+    return False
 
 
 def p115client_info():
@@ -177,11 +211,18 @@ def dedupe(s):
 
 
 def cookie_paths():
+    """cookie 候选路径，优先级从高到低。
+
+    首选 skill 目录内的 cookies.txt —— 这样 skill 自包含，搬到哪 cookie 跟到哪。
+    旧版装在 ~/.115/ 的也兼容（只读，不自动迁移）。
+    """
     p = []
     if os.environ.get("P115_COOKIE_FILE"):
         p.append(os.environ["P115_COOKIE_FILE"])
-    p += [os.path.join(os.getcwd(), "cookies.txt"),
-          os.path.join(COOKIE_HOME, "cookies.txt"), IOS_CK]
+    p += [os.path.join(SKILL_DIR, "cookies.txt"),
+          os.path.join(os.getcwd(), "cookies.txt"),
+          os.path.join(LEGACY_COOKIE_HOME, "cookies.txt"),
+          IOS_CK]
     return p
 
 
@@ -204,11 +245,15 @@ def load_cookie():
 
 
 def save_cookie(s):
-    dst = os.environ.get("P115_COOKIE_FILE") or os.path.join(COOKIE_HOME, "cookies.txt")
+    """cookie 一律写进 skill 目录（自包含）。"""
+    dst = os.environ.get("P115_COOKIE_FILE") or os.path.join(SKILL_DIR, "cookies.txt")
     os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
     with open(dst, "w", encoding="utf-8") as f:
         f.write(dedupe(s.strip()))
-    os.chmod(dst, 0o600)
+    try:
+        os.chmod(dst, 0o600)
+    except OSError:
+        pass
     if os.path.isdir(os.path.dirname(IOS_CK)):
         try:
             with open(IOS_CK, "w", encoding="utf-8") as f:
@@ -483,10 +528,12 @@ def cmd_doctor(a):
     这是给「新对话 / 新 agent」用的入口 —— 它不需要猜东西装在哪。
     """
     info = {
+        "skill_dir": SKILL_DIR,
         "runtime_home": RUNTIME_HOME,
         "venv_home": VENV_HOME,
         "venv_python": venv_python(),
         "venv_exists": os.path.isdir(VENV_HOME),
+        "venv_stale": venv_is_stale(),
         "running_in_fixed_venv": in_fixed_venv(),
         "current_python": sys.executable,
         "p115client": p115client_info(),
@@ -514,12 +561,15 @@ def cmd_doctor(a):
 
     ok = info["p115client"].get("installed")
     print("─── 115 skill 自检 ───")
-    print("固定数据目录: %s" % RUNTIME_HOME)
-    print("固定 venv:    %s  %s" % (VENV_HOME, "✓ 存在" if info["venv_exists"] else "✗ 不存在"))
+    print("skill 目录:   %s" % SKILL_DIR)
+    print("venv:         %s  %s" % (VENV_HOME, "✓ 存在" if info["venv_exists"] else "✗ 不存在"))
+    if info.get("venv_stale"):
+        print("  ⚠ venv 路径漂移（skill 目录被搬过），跑 setup 重建：")
+        print("     %s scripts/p115.py setup" % sys.executable)
     print("venv python:  %s" % venv_python())
     print("当前解释器:   %s" % sys.executable)
-    if info["venv_exists"] and not info["running_in_fixed_venv"]:
-        print("  ⚠ 你现在没用固定 venv 跑。建议改用：")
+    if info["venv_exists"] and not info["running_in_fixed_venv"] and not ok:
+        print("  ⚠ 你现在没用 skill 内 venv 跑。建议：")
         print("     %s scripts/p115.py <命令>" % venv_python())
     print()
     if ok:
@@ -549,15 +599,22 @@ def cmd_doctor(a):
 
 
 def cmd_setup(a):
-    """一键安装：在固定路径 ~/.115/venv 建 venv 并装依赖。
+    """一键安装：在 **skill 目录内** 建 venv 并装依赖。
 
     跨平台，不需要 agent 自己拼命令。重复执行是安全的。
+    如果检测到 venv 路径漂移（skill 目录被搬过），会先删除重建。
     """
+    import shutil
     import subprocess
     import venv as venv_mod
 
     py = venv_python()
-    print("固定安装位置: %s" % VENV_HOME)
+    print("skill 目录: %s" % SKILL_DIR)
+    print("安装位置:   %s" % VENV_HOME)
+
+    if os.path.exists(py) and venv_is_stale():
+        print("→ 检测到 venv 是从别的路径搬过来的，重建中…")
+        shutil.rmtree(VENV_HOME, ignore_errors=True)
 
     if not os.path.exists(py):
         print("→ 创建虚拟环境…")
@@ -578,16 +635,28 @@ def cmd_setup(a):
     if r.returncode != 0:
         err("依赖安装失败：\n%s" % (r.stderr or r.stdout)[-1200:])
 
-    info = p115client_info() if in_fixed_venv() else None
     print("→ 验证…")
-    v = subprocess.run([py, "-c", "import p115client,sys;print(p115client.__version__)"],
-                       capture_output=True, text=True)
+    v = subprocess.run(
+        [py, "-c", "from importlib.metadata import version;print(version('p115client'))"],
+        capture_output=True, text=True)
     if v.returncode != 0:
         err("验证失败：\n%s" % (v.stderr or v.stdout)[-800:])
+
+    # 记下安装元数据，方便跨会话确认
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"skill_dir": SKILL_DIR, "venv": VENV_HOME,
+                       "p115client": v.stdout.strip(),
+                       "installed_at": time.strftime("%Y-%m-%d %H:%M:%S")},
+                      f, ensure_ascii=False, indent=1)
+    except OSError:
+        pass
+
     print("✓ 完成。p115client %s" % v.stdout.strip())
     print()
     print("以后请用这个解释器调本 skill：")
     print("  %s scripts/p115.py <命令>" % py)
+    print("（用其他 python 也行，脚本会自动切过来）")
     if not cookie_path():
         print("\n还差 cookie，跑：")
         print("  %s scripts/p115.py login" % py)

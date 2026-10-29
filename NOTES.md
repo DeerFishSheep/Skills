@@ -186,56 +186,87 @@ if str(cid) != "0" and echoed and echoed != str(cid):
 
 ---
 
-## 固定安装路径与自动切换（2026-10-29 加）
+## 自包含安装：一切跟 skill 目录走（2026-10-29 定稿）
 
-### 问题
+### 决策变化
 
-skill 目录可能被移动/复制，或在另一台机器、另一个对话里指向另一个副本。如果依赖装在项目内 `.venv`，换环境就找不到，调用方会误判「没装」。
+先做过一版「固定 `~/.115/`」，被否掉了。理由：skill 可能装到任意位置
+（`~/.agents/skills/`、项目目录、别人机器上的任意路径），依赖若散落在家目录，
+调用方无法从 skill 目录自证「我装好了」。
 
-### 方案
+**最终方案：一切运行时产物放在 skill 自己的根目录下。**
 
-一切运行时产物固定放 `~/.115/`：
+```
+<SKILL_DIR>/.venv/              依赖（p115client 等）
+<SKILL_DIR>/cookies.txt         凭证
+<SKILL_DIR>/.setup-state.json   安装元数据
+```
 
-| 内容 | 路径 |
-|---|---|
-| 数据根 | `~/.115/` |
-| venv | `~/.115/venv/` |
-| 解释器（mac/Linux） | `~/.115/venv/bin/python` |
-| 解释器（Windows） | `~/.115/venv\Scripts\python.exe` |
-| cookie | `~/.115/cookies.txt` |
+`SKILL_DIR = dirname(dirname(abspath(__file__)))` —— 从脚本位置反推，不写死。
 
-`~` 永远展开成当前用户家目录，跨会话、跨机器都稳定。
+好处：
+- skill 装到哪，依赖跟到哪，整份目录自包含
+- 调用方进 skill 目录就能找到一切，不用全局搜索
+- 多份 skill 副本互不干扰
+
+### venv 不可跨机器 / 跨路径拷贝
+
+venv 的 `pyvenv.cfg` 和脚本 shebang 写死绝对路径。目录被搬走后 venv 会失效。
+
+**检测**：`venv_is_stale()` 读 `pyvenv.cfg` 的 `command` 行，取最后一段
+（当初创建时的目标路径），与当前 `VENV_HOME` 比较，不一致就是漂移。
+
+**修复**：`setup` 检测到漂移会先 `rmtree` 再重建。实测搬目录后：
+```
+→ 检测到 venv 是从别的路径搬过来的，重建中…
+→ 创建虚拟环境…
+→ 安装依赖…
+✓ 完成。p115client 0.0.9.7.2
+```
+重建后功能正常。
 
 ### 自动切换 `_reexec_into_fixed_venv()`
 
-启动时检查：当前 python 有没有 p115client？没有但 `~/.115/venv` 存在 → `os.execv` 切过去重跑。
+启动时检查：当前 python 有没有 p115client？没有但 `<skill>/.venv` 存在
+→ `os.execv` 切过去重跑。用 `P115_REEXEC=1` 防递归。
 
-这样下面三种写法结果完全一致：
-
+三种写法结果一致：
 ```bash
-python3 scripts/p115.py ls 0                 # 系统 python
-/usr/bin/python3 scripts/p115.py ls 0        # 另一个 python
-~/.115/venv/bin/python scripts/p115.py ls 0  # 直接 venv
+python3 scripts/p115.py ls 0                 # 系统 python，自动切
+/usr/bin/python3 scripts/p115.py ls 0        # 另一个 python，自动切
+.venv/bin/python scripts/p115.py ls 0        # 直接 venv，不切
 ```
-
-用 `P115_REEXEC=1` 环境变量防递归。
 
 ### 踩过的 bug：`in_fixed_venv()` 判断错误
 
-第一版用 `os.path.realpath(sys.executable) == os.path.realpath(venv_python())` 判断。**错的** —— venv 里的 `python` 本身就是指向系统 python 的 symlink，realpath 之后两边一样，Homebrew python 被误判「已在 venv 里」，于是不切换、继续报缺库。
+第一版用 `realpath(sys.executable) == realpath(venv_python())`。**错的** ——
+venv 里的 `python` 本身就是指向系统 python 的 symlink，realpath 后两边一样。
+Homebrew python 被误判「已在 venv」，于是不切换、继续报缺库。
 
-正确做法：比较 `sys.prefix`。venv 里它的值就是 venv 根目录。
+正确做法：比较 `sys.prefix`，venv 里它就是 venv 根目录。
 
 ```python
 def in_fixed_venv():
     return os.path.realpath(sys.prefix) == os.path.realpath(VENV_HOME)
 ```
 
-### `setup` / `doctor` 两个新命令
+### `.gitignore` 必须排除
 
-- `setup`：在固定路径建 venv + 装依赖，幂等。避开 PEP 668（Homebrew Python 有 `EXTERNALLY-MANAGED` 锁，直接 pip install 会失败）。
-- `doctor`：一次报全 —— 固定路径、venv 在不在、p115client 版本与位置、cookie、账号。**新对话接手时第一条应跑它。**
+```
+.venv/            # 80MB，每台机器自己建
+cookies.txt       # 凭证，绝不能提交
+.setup-state.json # 安装元数据，含本机绝对路径
+```
+
+纯文件体积 148KB，`.venv` 79MB。
+
+### `setup` / `doctor`
+
+- `setup`：建 venv + 装依赖 + 写 state，幂等，自动处理路径漂移
+- `doctor`：报全 skill 目录、venv 状态（含 stale 警告）、p115client 版本与位置、
+  cookie、账号。**新对话接手第一条命令。**
 
 ### 版本号显示坑
 
-`p115client` 包里的 `__version__` 是手写的过期值（0.0.9.7.2 的包写着 `(0, 0, 9)`）。查真实版本必须用 `importlib.metadata.version("p115client")`。
+`p115client` 包里的 `__version__` 是手写过期值（0.0.9.7.2 的包写着 `(0, 0, 9)`）。
+查真实版本必须用 `importlib.metadata.version("p115client")`。

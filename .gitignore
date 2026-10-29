@@ -1,4 +1,8 @@
+# 依赖与运行时（每台机器用 setup 自己建）
+.venv/
 __pycache__/
 *.pyc
+.setup-state.json
+
+# 凭证：绝对不能提交
 cookies.txt
-.venv/

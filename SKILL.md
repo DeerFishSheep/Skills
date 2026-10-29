@@ -7,35 +7,48 @@ description: 操作 115 网盘（列目录、递归树、搜索、重命名、�
 
 `scripts/p115.py` 是 p115client 的薄外壳。所有 115 接口调用都由 p115client 完成，本 skill 只维护：cookie 管理、限流、路径寻址、中文输出。
 
-## 🏠 固定安装路径（先看这条）
+## 🏠 自包含安装（先看这条）
 
-**本 skill 的一切运行时产物都固定放在 `~/.115/` 下，不跟项目目录走。**
+**本 skill 的一切运行时产物都在 skill 自己的目录下，不散落到家目录。**
 
-这个约定是为了解决一个问题：换对话、换 agent、换机器时，调用方不知道依赖装在哪，就会以为「没装」。
+```
+115-Pan-Skill/                  ← skill 根目录（SKILL_DIR）
+├── SKILL.md
+├── NOTES.md
+├── requirements.txt
+├── .gitignore
+├── .venv/                      ← 依赖装在这里（setup 创建）
+│   ├── bin/python              (macOS/Linux)
+│   └── Scripts/python.exe      (Windows)
+├── cookies.txt                 ← cookie（权限 600）
+└── scripts/p115.py
+```
 
-| 内容 | 固定路径 | 说明 |
-|---|---|---|
-| 数据目录 | `~/.115/` | 所有运行时产物的根 |
-| Python 虚拟环境 | `~/.115/venv/` | 装 p115client 的地方 |
-| venv 解释器（mac/Linux） | `~/.115/venv/bin/python` | |
-| venv 解释器（Windows） | `~/.115/venv\Scripts\python.exe` | |
-| Cookie | `~/.115/cookies.txt` | 必需，权限 600 |
+**为什么这样设计**：skill 装到哪，依赖就跟到哪。
 
-**为什么用 `~/.115/` 而不用项目内 `.venv`**：skill 目录可能被移动、复制，或在不同对话里指向不同副本；而 `~/.115/` 永远是当前用户的家目录，跨会话稳定。
+```
+~/.agents/skills/115-Pan-Skill/.venv/
+/opt/skills/115-Pan-Skill/.venv/
+~/Documents/xxx/115-Pan-Skill/.venv/
+```
+
+每个位置都是独立的、自包含的。调用方不需要知道全局装了什么，只要进 skill 目录就能找到一切。
+
+**注意：venv 不能跨机器拷贝。** 它内部写死了绝对路径，拷到别的机器会坏。正确做法是每台机器跑一次 `setup`。检测到路径漂移时 `setup` 会自动删除重建。
 
 ### 自动切换解释器（重要）
 
-脚本启动时会做一件事：**如果你用的 python 没装 p115client，但 `~/.115/venv` 存在，它会自动 `exec` 切到那个 venv 里的 python**，然后继续执行。
+脚本启动时会做一件事：**如果你用的 python 没装 p115client，但 `<skill>/.venv` 存在，它会自动 `exec` 切到那个 venv 里的 python**，然后继续执行。
 
 所以下面这些写法**都能跑**，结果一样：
 
 ```bash
 python3 scripts/p115.py ls 0                    # 系统 python，自动切
 /usr/bin/python3 scripts/p115.py ls 0           # 另一个 python，自动切
-~/.115/venv/bin/python scripts/p115.py ls 0     # 直接用 venv，不切
+.venv/bin/python scripts/p115.py ls 0           # 直接用 venv，不切
 ```
 
-但为了省去进程替换的开销，**推荐直接用固定 venv 的 python**。
+为了省掉进程替换开销，推荐直接用 `.venv/bin/python`。
 
 ## 🔍 先跑自检（任何新环境第一步）
 
@@ -43,7 +56,7 @@ python3 scripts/p115.py ls 0                    # 系统 python，自动切
 python3 scripts/p115.py doctor
 ```
 
-它会一次告诉你：固定路径在哪、venv 在不在、p115client 什么版本装在哪、cookie 找到没、账号通不通。
+它会一次告诉你：skill 目录在哪、venv 在不在（含路径漂移检测）、p115client 什么版本装在哪、cookie 找到没、账号通不通。
 
 `--json` 可输出机器可读格式：
 
@@ -59,13 +72,19 @@ python3 scripts/p115.py doctor --json
 python3 scripts/p115.py setup
 ```
 
-它会自动在 `~/.115/venv` 建 venv 并装依赖，**重复执行安全**。
+它会：
+1. 在 `<skill 目录>/.venv` 建 venv（已存在则跳过）
+2. 检测 venv 路径漂移（skill 目录被搬过）→ 自动删除重建
+3. 安装 `requirements.txt` 里的依赖
+4. 写 `.setup-state.json` 记录安装信息
+
+**重复执行安全。**
 
 手动等价命令：
 
 ```bash
-python3 -m venv ~/.115/venv
-~/.115/venv/bin/pip install -r requirements.txt
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
 ```
 
 **不要直接 `pip install -r requirements.txt`** —— Homebrew / 系统 Python 有 PEP 668 锁，会报 `externally-managed-environment`。必须用 venv。
@@ -211,9 +230,11 @@ p115.py whoami             # 验证 + 看 cookie 签发时间
 ## 安装
 
 ```bash
-python3 scripts/p115.py setup     # 在 ~/.115/venv 建环境装依赖，幂等
+python3 scripts/p115.py setup     # 在 skill 目录建 .venv 装依赖，幂等
 python3 scripts/p115.py login     # 或 set-cookie
 python3 scripts/p115.py doctor    # 验证一切就绪
 ```
+
+**skill 目录自包含**：`.venv/` 和 `cookies.txt` 都在 skill 根目录下，整份目录拷走后跑一次 `setup` 就能用。
 
 维护细节、抓包结论、踩坑记录见 `NOTES.md`。
