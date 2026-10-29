@@ -1,0 +1,10 @@
+# 运行时产物
+.venv/
+__pycache__/
+*.pyc
+.setup-state.json
+
+# 凭证
+cookies.txt
+*.cookies
+.env
