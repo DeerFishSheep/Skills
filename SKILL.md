@@ -149,7 +149,7 @@ p115.py whoami             # 验证 + 看 cookie 签发时间
 | `rb [offset]` | 看回收站 | `p115.py rb` | 1 |
 | `restore <rid...>` | 从回收站还原 | `p115.py restore 3550645885618619647` | 1 |
 | `url <目标>` | 取可下载直链 | `p115.py url /图片/a.jpg` | 2 |
-| `dl <目标> [输出目录]` | 下载到本地 | `p115.py dl /图片/a.jpg ./tmp` | 2 + CDN 流量（⚠ 见已知限制） |
+| `dl <目标> [输出目录]` | 下载到本地 | `p115.py dl /图片/a.jpg ./tmp` | 2 |
 | `up <本地文件> [目标目录]` | 上传 | `p115.py up ./a.zip /其他` | 2（分片走 OSS 不计限流） |
 | `offline <链接...> [--to 目录]` | 离线下载 | `p115.py offline 'magnet:?xt=...' --to /云下载` | 2 |
 | `offline-list [page]` | 看离线任务进度 | `p115.py offline-list` | 1 |
@@ -194,7 +194,11 @@ p115.py whoami             # 验证 + 看 cookie 签发时间
 ## 已知限制（真实存在，不要当成 bug 去修）
 
 - **`sign` 大概率失败**。签到接口 `proapi.115.com/{app}/2.0/user/points_sign` 要求 App 端登录态，网页 cookie 会返回 `errno 99`。代码已如实报错，不伪装成功。
-- **`dl` 实测 403，`url` 可用。** 直链本身拿得到（`url` 命令实测通过，可复制到浏览器/迅雷下载），但脚本直接 GET CDN 会 403 —— 已实测 8 种 UA / cookie / Range 组合全部 403，是 115 的防盗链，不是代码问题。所以：**要下载就用 `url` 拿链接交给浏览器，不要指望 `dl`。**
+- **`dl` / `url` 的 UA 必须与 cookie 配对**。`download_url_web2` 会返回一对「直链 + 专用 cookie」，这个 cookie 绑定了 `user_agent` 参数。
+  - 代码已固定用 `DL_UA` 常量，并显式传给接口：`download_url_web2(pc, user_agent=DL_UA)`
+  - 下载时同时带 `Cookie` 和同一个 `User-Agent`
+  - **如果自己拼请求，UA 不匹配会报 `403 ua not match cookie`**。这是 115 的防盗链设计，不是限流
+  - 直链 cookie 15 分钟过期
 - **删除只能进回收站。** 115 没有「按文件 id 彻底删除」的公开接口，本工具不提供 `purge`。要彻底清空请 rm 后在网页端回收站操作。
 - **回收站彻底删除需要安全密钥。** `recyclebin_clean2` 用默认 `000000` 会报「安全密钥错误」。README 里不猜用户密码。
 - **`offline` 对无效链接直接拒绝**，返回「错误的链接」。磁力链要带完整 `magnet:?xt=urn:btih:...`。
@@ -218,11 +222,13 @@ p115.py whoami             # 验证 + 看 cookie 签发时间
 | `rm` | ✅ 进回收站 |
 | `restore` | ✅ 从回收站捞回，位置正确 |
 
-**获取**：`url` ✅（可拿到完整直链）；`dl` ⚠️ 直链正常但 CDN 403（见已知限制）
+**获取**：`url` ✅（可拿到完整直链）；`dl` ✅（脚本直接下载，实测 53B 与 1.3MB 均无损）
+
+**上传**：`up` ✅（实测 53 字节文件，上传后 SHA1 与本地一致）
 
 ### ❌ 未实跑
 
-`up`（上传）`offline`（离线下载）`dup`（触发扫描）`sign`（签到）`share`（分享）
+`offline`（离线下载）`dup`（触发扫描）`sign`（签到）`share`（分享）
 
 代码已写好、方法名与 p115client 源码签名核对过，`--dry-run` 验过参数解析，但没真跑过。
 **首次真跑前先用 `--dry-run` 看一遍。**

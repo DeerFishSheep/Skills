@@ -915,6 +915,20 @@ def cmd_restore(a):
     print("已还原 %d 项" % len(a))
 
 
+# 下载专用 UA。必须与 download_url_web2(user_agent=...) 传的一致，
+# 否则 CDN 报 `ua not match cookie`。
+DL_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+         "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+
+
+def dl_info(pc):
+    """拿直链 + 配套 cookie 头。UA 必须显式传给接口，否则 cookie 和 UA 对不上。"""
+    r = call(client().download_url_web2, pc, user_agent=DL_UA)
+    if not r.get("state"):
+        err("取直链失败：%s" % (r.get("error") or r))
+    return r["url"], (r.get("headers") or {}).get("cookie") or "", r
+
+
 def cmd_url(a):
     if not a:
         err("用法：url <id|path>")
@@ -927,7 +941,7 @@ def cmd_url(a):
         err("这个条目没有 pickcode，取不了直链。")
     # App 接口（download_url / download_url_app）实测 errno 99，
     # web 版 download_url_web2 稳定可用，且会一并返回下载所需的 cookie 头。
-    r = call(client().download_url_web2, pc)
+    r = call(client().download_url_web2, pc, user_agent=DL_UA)
     if not r.get("state"):
         err("取直链失败：%s" % (r.get("error") or r))
     url = r.get("url") or ""
@@ -941,8 +955,10 @@ def cmd_url(a):
     print("  %s" % url)
     ck = (r.get("headers") or {}).get("cookie")
     if ck:
-        print("\n下载需要带这个 cookie 头（15 分钟过期）:")
-        print("  %s" % ck)
+        print("\n下载需同时带上这个 cookie 和 User-Agent：")
+        print("  Cookie: %s" % ck.split(";", 1)[0])
+        print("  User-Agent: %s" % DL_UA)
+        print("  （cookie 15 分钟过期，且必须与 UA 配对，否则报 ua not match cookie）")
 
 
 def cmd_dl(a):
@@ -955,11 +971,7 @@ def cmd_dl(a):
     pc = item.get("pc")
     if not pc:
         err("没有 pickcode，无法下载。")
-    r = call(client().download_url_web2, pc)
-    if not r.get("state"):
-        err("取直链失败：%s" % (r.get("error") or r))
-    url = r["url"]
-    headers = r.get("headers") or {}
+    url, ck, _r = dl_info(pc)
     name = item.get("n") or "download.bin"
     dst = os.path.join(outdir, name)
     os.makedirs(outdir, exist_ok=True)
@@ -967,9 +979,11 @@ def cmd_dl(a):
         print("[dry-run] 下载 → %s" % dst)
         return
 
-    # 下载走 CDN，不是 115 接口，不受 1 秒限流；但必须带签名直链和配套 cookie 头。
+    # 下载走 CDN，不是 115 接口，不受 1 秒限流。
+    # 关键是 Cookie 与 User-Agent 必须配对，否则 403 `ua not match cookie`。
     import urllib.request
-    req = urllib.request.Request(url, headers={k: v for k, v in headers.items() if v})
+    req = urllib.request.Request(
+        url, headers={"Cookie": ck, "User-Agent": DL_UA})
     try:
         with urllib.request.urlopen(req, timeout=60) as resp, open(dst, "wb") as f:
             got = 0
@@ -980,8 +994,7 @@ def cmd_dl(a):
                 f.write(buf)
                 got += len(buf)
     except Exception as e:
-        err("CDN 拒绝下载（%s）。115 防盗链导致脚本直连常驻 403。\n"
-            "把下面直链复制到浏览器 / 迅雷 / IDM（约 15 分钟内有效）：\n%s" % (e, url))
+        err("下载失败（%s）。\n直链（15 分钟内有效，需浏览器打开）：\n%s" % (e, url))
     print("已下载 → %s（%s）" % (dst, hum(got)))
 
 

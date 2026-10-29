@@ -295,3 +295,61 @@ cookies.txt       # 凭证，绝不能提交
 
 回收站里留了 5 个测试对象（`__probe_renamed` ×2、`__selftest_up2.txt` ×2、`__selftest__`），
 另有原有的 `Filmix.Trash`。115 彻底删除要安全密钥，脚本不猜密码，**需在网页端回收站点「清空」**。
+
+---
+
+## 上传/下载实测 + `ua not match cookie` 破解（2026-10-29）
+
+### 上传 ✅
+
+```bash
+p115.py up /tmp/115_upload_probe.txt "/其他"
+# 已上传「115_upload_probe.txt」id=3550666005569078305  大小=53.0B
+```
+
+`upload_file(src, pid=pid)` 一把过。内部自动算 sha1、走秒传/分块；向 OSS 发的分片
+请求不经过 webapi 限流，但初始化那步仍过 `call()`。
+
+**往返校验**：上传前与下载后 SHA1 一致（`c7624f48...`），无损。
+
+### 下载：踩了 `ua not match cookie` 这个坑
+
+第一版失败，报错体是：
+
+```json
+{"message":"ua not match cookie","request_id":"...","status":403}
+```
+
+排查过程（全部实测）：
+
+| 尝试 | 结果 |
+|---|---|
+| `download_url_web2(pc)` 不带 UA → 用返回 headers 下载 | 403 `ua not match cookie` |
+| 换 Chrome UA | 403 同样 |
+| 换 client 的 115disk UA | 403 同样 |
+| **`download_url_web2(pc, user_agent=UA)` + 同一 UA 下载** | **200 ✓** |
+
+**根因**：`download_url_web2` 返回的专用 cookie 是**和 `user_agent` 参数绑定的**。
+不传 `user_agent` 时，接口返回的 `headers["user-agent"]` 是空字符串，生成的 cookie
+就绑在空 UA 上；这时无论用什么 UA 去请求都对不上。
+
+**结论**：UA 必须显式传给接口，让服务端把 cookie 和它绑在一起。
+
+```python
+DL_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+         "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+
+r = client().download_url_web2(pc, user_agent=DL_UA)
+url = r["url"]
+ck  = r["headers"]["cookie"]
+# 下载时必须同时带 Cookie 和同一个 User-Agent
+```
+
+**验证**：
+- 53B 文件：内容一字不差
+- 1.3MB 图片 `dogKing.jpg`：完整下载 1359231 字节
+
+### 之前误判
+
+早期结论写成「`dl` 必然 403，是防盗链，改用浏览器下载」——**错的**。
+根因是 UA 没配对，不是防盗链。已在 SKILL.md 修正。
