@@ -1153,10 +1153,10 @@ CMDS = {
 
 
 def _reexec_into_fixed_venv():
-    """如果当前解释器不是固定 venv，但固定 venv 存在，就自动切过去。
+    """如果当前解释器不是 skill 自带 venv，但那个 venv 存在，就自动切过去。
 
     这是为了「换对话 / 换 agent 就以为没装」这个问题：无论调用方用的哪个
-    python，只要 ~/.115/venv 在，就无感切到那里，不会因为缺库而报错。
+    python，只要 <skill>/.venv 在，就无感切到那里，不会因为缺库而报错。
     用环境变量防递归。
     """
     if os.environ.get("P115_REEXEC") == "1":
