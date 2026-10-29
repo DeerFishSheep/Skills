@@ -270,3 +270,28 @@ cookies.txt       # 凭证，绝不能提交
 
 `p115client` 包里的 `__version__` 是手写过期值（0.0.9.7.2 的包写着 `(0, 0, 9)`）。
 查真实版本必须用 `importlib.metadata.version("p115client")`。
+
+---
+
+## 写命令实测记录（2026-10-29）
+
+在 `其他` 目录下建临时目录跑完整闭环，跑完已清理：
+
+| 命令 | 调用 | 结果 |
+|---|---|---|
+| `mkdir /其他 __probe_xxx` | `fs_mkdir(name, pid)` | ✅ 返回新 cid |
+| `rename <id> __probe_renamed` | `fs_rename((cid, name))` | ✅ 生效 |
+| `cp /图片 <id>` | `fs_copy(payload, pid)` | ✅ 副本落在图片，同名自动 `(1)` |
+| `mv /其他 <副本id>` | `fs_move(payload, pid)` | ✅ 跨目录成功 |
+| `rm <id1> <id2>` | `fs_delete(payload)` | ✅ 进回收站 |
+| `restore <rid>` | `recyclebin_revert([rid])` | ✅ 回到原位 |
+
+**注意**：cp 同名会变成 `xxx(1)`，这是 115 服务端行为，不是 bug。
+
+**仍未实跑**：`up` `offline` `dup`（触发）`sign` `share`。这些要么写盘、要么触发服务端长任务，
+首次使用建议先 `--dry-run`。
+
+## 测试遗留（需手动清）
+
+回收站里留了 5 个测试对象（`__probe_renamed` ×2、`__selftest_up2.txt` ×2、`__selftest__`），
+另有原有的 `Filmix.Trash`。115 彻底删除要安全密钥，脚本不猜密码，**需在网页端回收站点「清空」**。
