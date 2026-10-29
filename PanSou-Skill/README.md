@@ -30,7 +30,7 @@ cd PanSou-Skill
 # 服务状态
 python3 scripts/ps.py health
 
-# 搜索（默认 115 + 夸克 + 阿里云）
+# 搜索（默认 115 + 夸克 + 阿里云 + 磁力）
 python3 scripts/ps.py search 繁花
 
 # 搜索并验活
@@ -61,7 +61,7 @@ python3 scripts/ps.py plugins
 
 | 选项 | 说明 | 默认 |
 |---|---|---|
-| `--type` | 网盘类型，逗号分隔 | `115,quark,aliyun` |
+| `--type` | 网盘类型，逗号分隔 | `115,quark,aliyun,magnet` |
 | `--from` | `all` / `tg` / `plugin` | `all` |
 | `--limit` | 返回条数 | `20` |
 | `--refresh` | 跳过缓存 | 关闭 |

@@ -767,7 +767,9 @@ def cmd_path(a):
     if not data:
         err("找不到 id=%s" % fid)
     # 用父目录的 list 响应里的 path 字段拼完整路径（get_info 不带这条链）
-    parent = ls_page(data.get("pid") or "0", 0, 1)
+    # 坑：fs_file 对单文件常不返回 pid，父目录在 cid 字段里
+    parent_id = data.get("pid") or data.get("cid") or "0"
+    parent = ls_page(parent_id, 0, 1)
     names = [p.get("name") for p in (parent.get("path") or []) if p.get("name")]
     if names and names[0] == "根目录":
         names = names[1:]

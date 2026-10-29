@@ -14,7 +14,7 @@ PanSou 网盘资源搜索 CLI
   plugins                    列出可用插件与频道
 
 search 参数：
-  --type 115,quark,aliyun    网盘类型，逗号分隔，默认 115,quark,aliyun
+  --type 115,quark,aliyun,magnet  网盘类型，逗号分隔，默认 115,quark,aliyun,magnet
   --from all|tg|plugin       数据来源，默认 all
   --limit 20                 返回条数上限
   --refresh                  跳过服务端缓存
@@ -40,7 +40,7 @@ import urllib.request
 API_BASE = os.environ.get("PANSOU_API_BASE", "https://pansou.259952.xyz").rstrip("/")
 
 # 默认搜索的网盘类型
-DEFAULT_TYPES = ["115", "quark", "aliyun"]
+DEFAULT_TYPES = ["115", "quark", "aliyun", "magnet"]
 
 # 网盘类型显示名
 TYPE_LABEL = {
