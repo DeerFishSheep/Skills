@@ -150,6 +150,69 @@ share_update({"share_code": code, "action": "cancel"})
 
 `action` 可取 `cancel` 或 `delete`。
 
+## 分享接收：为什么用 share/snap 而不是 share_info
+
+接收外部分享需要两步：**校验** + **转存**。
+
+### share_info 会误报
+
+`webapi.115.com/share/info`（`client.share_info`）对跨域分享常返回
+`state: false` + `分享已取消`，但同一链接在浏览器里打开是正常的。
+
+实测同一个分享 `swsl91b3zdf`（提取码 `char`）：
+
+| 接口 | 结果 |
+|---|---|
+| `webapi.115.com/share/info` | `state: false`，`分享已取消` |
+| `115cdn.com/webapi/share/snap` | `state: true`，`share_state: 1`，标题/大小/文件列表齐全 |
+
+### 正确接口
+
+网页端分享页实际调用的是 `https://115cdn.com/webapi/share/snap`：
+
+```
+GET /webapi/share/snap
+    share_code=<分享码>
+    offset=0
+    limit=20
+    receive_code=<提取码>
+    cid=
+
+Headers:
+  Referer: https://115cdn.com/s/<share_code>?password=<提取码>&
+  X-Requested-With: XMLHttpRequest
+  User-Agent: <DL_UA>
+```
+
+返回包含：
+
+- `data.shareinfo.share_title` —— 分享标题
+- `data.shareinfo.file_size` —— 总大小
+- `data.shareinfo.share_state` —— `1` 正常
+- `data.shareinfo.forbid_reason` —— 非空表示不可用
+- `data.shareinfo.expire_time` —— `-1` 表示永久
+- `data.list[].cid` / `.fid` —— 转存所需的 id
+- `data.userinfo.user_name` —— 分享者
+
+判定有效性：`state == true` 且 `forbid_reason` 为空 且 `share_state ∈ {0, 1}`。
+
+### 转存
+
+`client.share_receive` 对应 `POST webapi.115.com/share/receive`：
+
+```python
+{
+  "share_code": code,
+  "receive_code": pw,
+  "file_id": "cid1,cid2",   # 从 snap 的 list 里取
+  "cid": 目标目录
+}
+```
+
+返回 `receive_title` / `recv_folder_count` / `recv_file_count` / `receive_size`。
+
+实测转存 68.3 GB 单文件成功，落在指定目录。
+
 ## 签到不可用
 
 `user_points_sign` / `user_points_sign_post` 要求 App 端登录态。实测 `app` 为 `web`、`android`、`ios`、`115ios` 及默认值，均返回「请重新登录」；`user_sign`（q.115.com）返回 HTML 错误页。

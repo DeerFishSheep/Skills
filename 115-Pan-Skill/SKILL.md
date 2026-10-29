@@ -149,6 +149,8 @@ p115.py whoami                   # 验证并查看签发时间
 
 | 命令 | 用途 | 示例 |
 |---|---|---|
+| `check <链接>` | 校验分享链接，显示内容 | `p115.py check 'https://115cdn.com/s/xxx?password=yyy'` |
+| `save <链接> [目录]` | 转存分享到自己的网盘 | `p115.py save 'https://115cdn.com/s/xxx?password=yyy' /云下载` |
 | `share <项...>` | 创建分享链接 | `p115.py share /图片/a.jpg` |
 | `shares` | 列出我的分享 | `p115.py shares` |
 | `share-cancel <share_code...>` | 撤销分享 | `p115.py share-cancel sws2c343wpd` |
@@ -169,6 +171,33 @@ p115.py whoami                   # 验证并查看签发时间
 | `--json` | 输出原始 JSON，供管道或程序解析 |
 | `--dry-run` | 写操作只打印计划，不执行 |
 | `--yes` | 跳过危险操作的二次确认（非交互环境必需） |
+
+## 分享接收
+
+从外部拿到 115 分享链接后，两步走：
+
+```bash
+# 1. 先校验，看内容是否值当
+p115.py check 'https://115cdn.com/s/swsmyd73h8c?password=vwvw'
+
+# 2. 转存到自己的网盘
+p115.py save 'https://115cdn.com/s/swsmyd73h8c?password=vwvw' /云下载
+```
+
+链接写法都支持：
+
+```
+https://115cdn.com/s/xxxxx?password=yyyy
+https://115.com/s/xxxxx?password=yyyy
+xxxxx yyyy
+xxxxx
+```
+
+`save` 默认只转存第一项，加 `--all` 转存全部。支持 `--dry-run`。
+
+**校验用的是 `115cdn.com/webapi/share/snap`，不是 `webapi.115.com/share/info`。**
+后者对跨域分享常误报「分享已取消」，前者是网页端分享页实际调用的接口，能拿到
+标题、大小、分享者、过期时间、文件列表。
 
 ## 路径寻址
 
@@ -241,7 +270,7 @@ p115.py whoami                   # 验证并查看签发时间
 - **读取**：`doctor` `whoami` `ls` `tree` `info` `path` `search` `find` `du` `space` `rb` `dup list` `shares` `points`
 - **写入**：`mkdir` `rename` `cp` `mv` `rm` `restore`
 - **传输**：`url` `dl` `up`（上传下载往返 SHA1 一致）
-- **分享**：`share` `shares` `share-cancel`（完整闭环）
+- **分享**：`share` `shares` `share-cancel`（完整闭环）、`check` `save`（校验与转存，已实测 68GB 文件转存成功）
 
 以下命令已实现并通过参数校验，但未在真实环境中执行，首次使用建议先加 `--dry-run`：
 

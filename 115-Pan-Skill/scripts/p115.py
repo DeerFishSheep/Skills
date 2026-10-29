@@ -12,10 +12,14 @@
 """
 import json
 import os
+import re
 import sys
 import time
 import threading
 import unicodedata
+import urllib.error
+import urllib.parse
+import urllib.request
 
 # ---------------------------------------------------------------- 全局开关
 JSON_OUT = "--json" in sys.argv
@@ -1165,6 +1169,174 @@ def cmd_sign(a):
         print("本次获得: %s 积分" % d.get("points"))
 
 
+def parse_share_url(s):
+    """从各种写法里抽出 (share_code, receive_code)。
+
+    支持：
+      https://115cdn.com/s/swsl91b3zdf?password=char
+      https://115.com/s/swsl91b3zdf?password=char
+      https://115cdn.com/s/swsl91b3zdf
+      swsl91b3zdf char
+      swsl91b3zdf
+    """
+    s = str(s).strip()
+    pw = ""
+    m = re.search(r"(?:share_code=)([0-9a-zA-Z]+)", s)
+    if m:
+        code = m.group(1)
+    else:
+        m = re.search(r"/s/([0-9a-zA-Z]+)", s)
+        code = m.group(1) if m else None
+    if not code:
+        # 裸分享码
+        m = re.match(r"^([0-9a-zA-Z]{8,})$|^([0-9a-zA-Z]{8,})\s+(.+)$", s)
+        if m:
+            code = m.group(1) or m.group(2)
+            pw = (m.group(3) or "").strip()
+    # 提取码
+    for pat in (r"password=([0-9a-zA-Z]+)", r"receive_code=([0-9a-zA-Z]+)"):
+        mm = re.search(pat, s)
+        if mm:
+            pw = mm.group(1)
+            break
+    if not code:
+        err("无法解析分享链接：%s" % s)
+    return code, pw
+
+
+def snap_share(code, pw, limit=20, cid=""):
+    """用 115cdn 的 share/snap 查分享真实状态。
+
+    这是网页端分享页实际调用的接口，比 webapi 的 share_info 准：
+    share_info 对跨域分享常误报「分享已取消」，snap 能拿到标题、大小、
+    share_state、文件列表、以及转存所需的 file_id。
+    """
+    q = urllib.parse.urlencode({"share_code": code, "offset": 0,
+                                "limit": limit, "receive_code": pw, "cid": cid})
+    req = urllib.request.Request("https://115cdn.com/webapi/share/snap?" + q,
+                                 headers={
+                                     "Referer": "https://115cdn.com/s/%s?password=%s&" % (code, pw),
+                                     "X-Requested-With": "XMLHttpRequest",
+                                     "Accept": "application/json",
+                                     "User-Agent": DL_UA,
+                                 })
+    _throttle()
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        err("查询分享失败（HTTP %s）" % e.code)
+    except Exception as e:
+        err("查询分享失败：%s" % e)
+
+
+def cmd_check(a):
+    """校验分享链接是否有效，并显示内容。"""
+    if not a:
+        err("用法：check <分享链接|share_code> [提取码]")
+    code, pw = parse_share_url(a[0])
+    if len(a) > 1 and not pw:
+        pw = a[1]
+    d = snap_share(code, pw)
+    data = d.get("data") or {}
+    si = data.get("shareinfo") or {}
+    ui = data.get("userinfo") or {}
+
+    ok = bool(d.get("state"))
+    reason = (si.get("forbid_reason") or "").strip()
+    state = si.get("share_state")
+    valid = ok and not reason and state in (0, 1)
+
+    if JSON_OUT:
+        out({"valid": valid, "share_code": code, "title": si.get("share_title"),
+             "size": si.get("file_size"), "state": state, "reason": reason,
+             "user": ui.get("user_name"),
+             "files": [{"name": f.get("name") or f.get("n"),
+                        "id": f.get("cid") or f.get("fid"),
+                        "dir": bool(f.get("cid")) and not f.get("fid")}
+                       for f in (data.get("list") or [])]})
+        return
+
+    if not ok:
+        print("✗ 链接无效：%s" % (d.get("error") or "未知原因"))
+        return
+    if reason:
+        print("✗ 链接不可用：%s" % reason)
+        return
+
+    print("✓ 链接有效")
+    print("标题:   %s" % si.get("share_title"))
+    print("大小:   %s" % hum(si.get("file_size") or 0))
+    if ui.get("user_name"):
+        print("分享者: %s" % ui.get("user_name"))
+    exp = si.get("expire_time")
+    print("过期:   %s" % ("永久" if exp in (-1, 0) else
+                          time.strftime("%Y-%m-%d", time.localtime(exp))
+                          if exp else "未知"))
+    if si.get("receive_code"):
+        print("提取码: %s" % si.get("receive_code"))
+    items = data.get("list") or []
+    if items:
+        print("文件（%d 项）:" % len(items))
+        for f in items:
+            d_ = bool(f.get("cid")) and not f.get("fid")
+            print("  %s %s" % ("[DIR] " if d_ else "[FILE]",
+                               (f.get("name") or f.get("n") or "")[:70]))
+
+
+def cmd_save(a):
+    """转存分享到自己的网盘。"""
+    if not a:
+        err("用法：save <分享链接|share_code> [目标目录] [--all]")
+    all_files = "--all" in sys.argv
+    code, pw = parse_share_url(a[0])
+    # 第二个参数：如果不是提取码形式，就当作目标目录
+    rest = [x for x in a[1:] if x != "--all"]
+    pid = "0"
+    if rest:
+        if len(pw) <= 8 and len(rest[0]) <= 8 and not rest[0].startswith("/"):
+            pw = rest[0]
+            rest = rest[1:]
+        if rest:
+            pid = resolve_dir(rest[0])
+
+    d = snap_share(code, pw)
+    data = d.get("data") or {}
+    si = data.get("shareinfo") or {}
+    if not d.get("state"):
+        err("分享不可用：%s" % (d.get("error") or "未知"))
+    reason = (si.get("forbid_reason") or "").strip()
+    if reason:
+        err("分享不可用：%s" % reason)
+
+    items = data.get("list") or []
+    ids = [(f.get("cid") or f.get("fid")) for f in items]
+    ids = [i for i in ids if i]
+    if not ids:
+        err("分享中没有可转存的内容")
+    if not all_files:
+        ids = ids[:1]
+
+    if DRY_RUN:
+        print("[dry-run] 转存「%s」（%s）→ cid=%s，%d 项"
+              % (si.get("share_title"), hum(si.get("file_size") or 0), pid, len(ids)))
+        return
+
+    r = call(client().share_receive, {
+        "share_code": code, "receive_code": pw,
+        "file_id": ",".join(str(i) for i in ids), "cid": pid})
+    if not r.get("state"):
+        err("转存失败：%s" % (r.get("error") or r))
+    rd = r.get("data") or {}
+    if JSON_OUT:
+        out(rd)
+        return
+    print("✓ 已转存：「%s」" % (rd.get("receive_title") or si.get("share_title")))
+    print("  目录 %s 个 / 文件 %s 个，共 %s"
+          % (rd.get("recv_folder_count", "?"), rd.get("recv_file_count", "?"),
+             hum(rd.get("receive_size") or 0)))
+
+
 def cmd_share(a):
     """创建分享链接。"""
     if not a:
@@ -1246,6 +1418,7 @@ def cmd_points(a):
 
 
 CMDS = {
+    "check": cmd_check, "save": cmd_save,
     "setup": cmd_setup, "doctor": cmd_doctor,
     "login": cmd_login, "set-cookie": cmd_setcookie, "whoami": cmd_whoami,
     "ls": cmd_ls, "tree": cmd_tree, "info": cmd_info, "path": cmd_path,
