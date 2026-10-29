@@ -6,7 +6,8 @@ AI Agent Skills 集合。每个 skill 是一个独立目录，自包含安装，
 
 | Skill | 说明 | 依赖 |
 |---|---|---|
-| [115-Pan-Skill](115-Pan-Skill/) | 115 网盘命令行工具：文件管理、上传下载、离线、分享 | Python 3.11+ |
+| [115-Pan-Skill](115-Pan-Skill/) | 115 网盘命令行工具：文件管理、上传下载、离线、分享、转存 | Python 3.12+ |
+| [PanSou-Skill](PanSou-Skill/) | 网盘资源搜索：多网盘检索、链接验活 | 无（纯标准库） |
 
 ## 使用方式
 
