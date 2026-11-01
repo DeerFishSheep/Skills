@@ -231,7 +231,11 @@ def dedupe(s):
 
     browser_cookie3 会把各子域同名 cookie 全导进来，实测 18 个同名 acw_tc
     会让服务端解析异常。保留第一次出现的值。
+
+    分隔符可能是 ";+"（URL 编码的空格）。不换回 "; " 时服务端会把
+    "+KID=..." 当成畸形键，表现为接口 405 或鉴权莫名失败。
     """
+    s = s.replace(";+", "; ").replace(";%20", "; ")
     seen, order = {}, []
     for kv in s.split(";"):
         kv = kv.strip()
