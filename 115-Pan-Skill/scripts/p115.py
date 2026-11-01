@@ -7,7 +7,8 @@
 
 用法: p115.py <命令> [参数...] [--json] [--dry-run] [--yes]
 
-限流铁律：115 最多每秒 2 次请求，超了返回 HTTP 405 并封禁数分钟。
+限流铁律：115 最多每秒 2 次请求，超了返回 HTTP 405。但 405 不等于限流 ——
+CDN/WAF 拦截同样返回 405，两者处理方式相反，判定见 _explain_405()。
 本文件所有 p115client 调用都过 call()，1 秒 1 次，绝不放行裸调用。
 """
 import json
@@ -168,9 +169,40 @@ def call(fn, *args, **kwargs):
         except Exception as e:
             text = str(e)
             if attempt == 0 and any(t in text for t in TRANSIENT):
-                time.sleep(3.0)
-                continue
+                # WAF 拦截重试没用，只会多打一次请求
+                if not ("405" in text and _waf_405(e)):
+                    time.sleep(3.0)
+                    continue
             raise RuntimeError(_explain(e)) from None
+
+
+def _waf_405(e):
+    """405 是否来自 CDN/WAF 拦截，而不是限流。
+
+    115 的限流走自家 JSON 响应；WAF 拦截返回 Tengine + Aliyun 的 HTML 错误页。
+    两者都是 405，但处理方式相反：限流要等，WAF 要换出口，等多久都没用。
+    """
+    hdrs = getattr(e, "headers", None) or {}
+    return "text/html" in str(hdrs.get("content-type", "")).lower()
+
+
+def _explain_405(e, text):
+    url = getattr(e, "url", "") or "?"
+    if _waf_405(e):
+        return ("HTTP 405 = 被 115 的 CDN/WAF 拒绝，不是限流，也不是登录问题，"
+                "等多久都不会好。\n"
+                "接口: %s\n"
+                "排查顺序：\n"
+                "  1. 换出口：代理 / VPN / 境外 IP 会被拦，换国内直连再试\n"
+                "  2. 看范围：其它命令正常、只有该接口 405 = 这个接口被拦\n"
+                "  3. 浏览器打开同一接口，同样 405 = 服务端拦截，与本机无关\n"
+                "原始信息: %s" % (url, text))
+    return ("HTTP 405 = 请求被 115 拒绝。最常见的成因是限流（超过每秒 2 次），"
+            "但也可能是接口级拦截。\n"
+            "接口: %s\n"
+            "先停 3-5 分钟再跑，并确认没有别的程序（含手机 App、网页）同时在刷 115。\n"
+            "仍然 405，按 WAF 拦截处理：换国内直连出口再试，等待无效。\n"
+            "原始信息: %s" % (url, text))
 
 
 def _explain(e):
@@ -181,8 +213,7 @@ def _explain(e):
         return ("登录态失效（990001 / errno 99）。cookie 过期了，重新运行 "
                 "`p115.py login` 或 `p115.py set-cookie '<...>'`。\n原始信息: " + text)
     if "405" in text:
-        return ("HTTP 405 = 触发限流，不是登录问题。停手等 3-5 分钟再跑，"
-                "并确认没有别的程序同时在刷 115。\n原始信息: " + text)
+        return _explain_405(e, text)
     if "990009" in text or "尚未执行完成" in text:
         return ("上一个操作（删除/还原/复制）还没跑完，等几秒再来。\n原始信息: " + text)
     if "231011" in text or "已删除" in text:
