@@ -10,6 +10,7 @@
 - **链接验活** —— 批量校验链接有效性，自动过滤失效资源
 - **多源并发** —— 背后是数十个插件与百余个 Telegram 频道
 - **零依赖** —— 纯 Python 标准库，不需要虚拟环境
+- **附带查片工具** —— `scripts/tmdb.py` 走 TMDB 官方 API，搜前定片名、搜后写简介
 - **可切换实例** —— 默认使用自建 PanSou 服务，也可通过环境变量指向任意实例
 
 ## 环境要求
@@ -44,9 +45,36 @@ python3 scripts/ps.py check 'https://115cdn.com/s/xxxxx?password=yyyy'
 
 # 查看可用插件与频道
 python3 scripts/ps.py plugins
+
+# 查片名 / 影片资料（附属工具，TMDB 官方 API）
+python3 scripts/tmdb.py 尸变
 ```
 
 完整命令说明见 [`SKILL.md`](SKILL.md)。
+
+## 查影片资料：scripts/tmdb.py
+
+搜资源前先用它把片名、年份确认准；需要介绍片子时也用它。
+
+```bash
+python3 scripts/tmdb.py 尸变                  # 中文名 / 原名 / 英文名都能搜
+python3 scripts/tmdb.py "The Weight" 2026     # 第二参数限定年份
+python3 scripts/tmdb.py --id 1290418          # 已知 TMDB id 直取
+python3 scripts/tmdb.py 监狱雄心 --json       # 机器可读
+```
+
+输出中文名 / 原名 / 年份 / 类型 / 片长 / 导演 / 编剧 / 主演 / 评分 / 简介。
+
+需要一个 TMDB API key，按下列顺序读取：
+
+1. 环境变量 `TMDB_API_KEY`
+2. `.secrets/tmdb_api_key`（skill 目录内，600 权限，已 gitignore）
+3. `~/.config/tmdb/api_key`（旧位置，兼容）
+
+```bash
+mkdir -p .secrets && chmod 700 .secrets
+echo '你的key' > .secrets/tmdb_api_key && chmod 600 .secrets/tmdb_api_key
+```
 
 ## 命令一览
 
@@ -56,6 +84,7 @@ python3 scripts/ps.py plugins
 | `check <链接...>` | 校验链接有效性 |
 | `health` | 服务状态 |
 | `plugins` | 列出插件与频道 |
+| `scripts/tmdb.py <片名>` | 查片名与影片资料（附属工具） |
 
 `search` 选项：
 

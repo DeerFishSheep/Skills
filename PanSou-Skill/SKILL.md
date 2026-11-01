@@ -1,6 +1,6 @@
 ---
 name: pansou
-description: 通过 PanSou 搜索网盘资源（115、夸克、阿里云、百度、UC、天翼、123、迅雷等），支持校验链接有效性。当用户提到盘搜、PanSou、找资源、搜网盘、搜电影/剧集/电子书、资源链接、磁力搜索时使用。
+description: 通过 PanSou 搜索网盘资源（115、夸克、阿里云、百度、UC、天翼、123、迅雷等），支持校验链接有效性；附带 tmdb.py 查片名与影片资料。当用户提到盘搜、PanSou、找资源、搜网盘、搜电影/剧集/电子书、资源链接、磁力搜索、查影片资料/豆瓣没有的片名/这部片讲什么时使用。
 ---
 
 # PanSou 盘搜
@@ -152,10 +152,40 @@ python3 ~/.agents/skills/115-Pan-Skill/scripts/p115.py save 'https://115cdn.com/
 
 两个 skill 相互独立，任一个不可用不影响另一个。
 
+## 查片名与影片资料（scripts/tmdb.py）
+
+找片的前置：搜之前先把真名确认准；搜完之后要介绍片子，也用它。走 TMDB 官方 v3 API，不爬别的站。同样零依赖、纯标准库。
+
+```bash
+# 中文名 / 原名 / 英文名都能直接搜，不用先翻译
+python3 scripts/tmdb.py 尸变
+
+# 第二个参数限定年份
+python3 scripts/tmdb.py "The Weight" 2026
+
+# 已知 TMDB id 时直取
+python3 scripts/tmdb.py --id 1290418
+
+# 机器可读
+python3 scripts/tmdb.py 监狱雄心 --json
+```
+
+输出：中文名 / 原名 / 年份 / 类型 / 片长 / 导演 / 编剧 / 主演(角色) / 评分 / 简介。
+
+- 同名多结果时脚本会把候选列在末尾，要精确定位就用 `--id`。
+- 接口 `/search/movie`、`/movie/{id}?append_to_response=credits`，`language=zh-CN`，所以类型和简介直接是中文。
+- 导演取 crew 里 `job=="Director"`；编剧取 Writer/Screenplay/Story；主演取 cast 前几位。
+- 请求走 `curl`，不用 urllib（对 TMDB 不稳）。
+
+**API key** 读取顺序：`TMDB_API_KEY` 环境变量 → `<skill>/.secrets/tmdb_api_key`（推荐，600 权限，已 gitignore）→ `~/.config/tmdb/api_key`（旧位置，兼容）。key 不要写进仓库、不要回显到输出里。
+
+**介绍影片不剧透**：两三句话说清设定、主角处境、核心冲突就够，不讲情节走向、反转、结局。TMDB 自带的中文简介本来就不剧透，直接用。
+
 ## 找资源的正确流程（重要）
 
 这是使用者明确要求的做法，照这个走，不要自由发挥：
 
+0. **先确认片名**。名字可能记错、译名可能不一样时，先跑 `python3 scripts/tmdb.py <关键词>` 把中文名 / 原名 / 年份定下来，再拿去搜资源。
 1. **一次性抓够量**。一次搜索就把候选全部拿到（`--limit 60` 起步），不要边搜边试、一条一条往前推。
 2. **自己分析质量再挑**。拿到一批后横向比较：分辨率（2160p > 1080p > TC/TS）、码率、音轨（DDP5.1 / TrueHD / DTS-HD）、字幕（中字/特效字幕）、文件体积、压制组（FLUX、NTb、CMCT 等）。挑**一个最好的**保存。
 3. **不要一直找「有没有更好的」**。挑定就落，不要反复加关键词追更高版本。
